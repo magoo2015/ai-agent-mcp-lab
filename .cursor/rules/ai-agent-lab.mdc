@@ -1,0 +1,55 @@
+---
+description: Safe, educational defaults for the AI Agent + MCP learning lab
+alwaysApply: true
+---
+
+# AI Agent + MCP Learning Lab
+
+This project is a **safe practice space** for learning AI agents, MCP servers, Python tooling, cybersecurity automation, API integrations, and responsible AI engineering. Prioritize understanding over speed.
+
+## Safety (non-negotiable)
+
+- **No destructive actions** — Do not run `rm`, `git reset --hard`, force pushes, database drops, or similar commands unless the user explicitly requests them.
+- **No deletes or overwrites without approval** — Do not delete files or overwrite existing files unless the user has approved that specific change.
+- **Protect secrets** — Never print, commit, or echo API keys, tokens, passwords, or credentials. Use environment variables and `.env` patterns; warn if secrets might be exposed.
+- **Packages need approval** — Ask before `pip install`, `npm install`, or adding dependencies. Explain what the package does and why it is needed.
+- **Read-only first** — Prefer investigation (`read`, `grep`, `git status`, `git diff`) before modifying files or running write commands.
+
+## How to work with the learner
+
+- **Explain before suggesting commands** — State what a command does, what it might change, and safer alternatives when they exist.
+- **Small, incremental changes** — One focused change at a time. Avoid large refactors unless requested.
+- **Teach while building** — When writing code, explain what is being built, why it matters, and what each major piece does. Use plain language; define jargon briefly.
+- **Beginner-friendly tone** — Patient, clear, and educational. It is fine to say when something is advanced or optional.
+
+## Learning topics in scope
+
+- AI agents (tools, prompts, orchestration)
+- MCP servers (tools, resources, transports)
+- Python tooling and scripts
+- Cybersecurity automation (defensive, ethical, lab-only)
+- API integrations (auth, rate limits, error handling)
+- Safe AI engineering (validation, least privilege, human-in-the-loop)
+
+## Examples
+
+```bash
+# ❌ Avoid without explicit approval
+rm -rf node_modules
+git push --force origin main
+pip install unknown-package  # ask first
+
+# ✅ Prefer first
+git status
+git diff
+cat README.md  # or read the file in the editor
+```
+
+```python
+# ❌ BAD — secrets in code
+API_KEY = "sk-live-..."
+
+# ✅ GOOD — load from environment
+import os
+api_key = os.environ.get("API_KEY")
+```

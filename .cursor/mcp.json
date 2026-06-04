@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/ghost/ai-agent-mcp-lab"
+      ]
+    },
+
+    "soc-assistant": {
+      "command": "/Users/ghost/ai-agent-mcp-lab/venv/bin/python",
+      "args": [
+        "/Users/ghost/ai-agent-mcp-lab/scripts/soc_mcp_server.py"
+      ]
+    }
+  }
+}
