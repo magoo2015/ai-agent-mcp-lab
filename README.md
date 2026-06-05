@@ -344,6 +344,18 @@ This project currently includes a working custom Python MCP server with multiple
 
 The lab is currently local-only and does not connect to production security tools or external APIs.
 
+## Current Workflow Output
+
+The `investigate_ssh_alert` tool returns a complete SOC triage package:
+
+- Alert summary
+- Risk score
+- Investigation summary
+- Recommended Wazuh/OpenSearch query
+- Recommended Defender/Sentinel queries
+
+This allows an analyst to move from a raw Wazuh alert to a structured investigation package in one MCP tool call.
+
 ---
 
 # Author
