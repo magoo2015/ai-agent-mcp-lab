@@ -338,6 +338,12 @@ Workflows combine tools into useful outcomes.
 
 This project demonstrates how AI agents can augment security operations by combining reasoning, structured tooling, and repeatable workflows.
 
+## Current Status
+
+This project currently includes a working custom Python MCP server with multiple SOC-focused tools and one orchestrated SSH alert investigation workflow.
+
+The lab is currently local-only and does not connect to production security tools or external APIs.
+
 ---
 
 # Author

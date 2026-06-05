@@ -429,8 +429,15 @@ def investigate_ssh_alert(
 ) -> str:
     """
     Run a full SSH failed-login investigation from a Wazuh alert file:
-    parse, score, and generate an investigation summary. No API calls.
-    Reuses parse_wazuh_alert, score_ssh_alert, and generate_investigation_summary.
+    parse, score, summarize, and generate recommended hunt queries. No API calls.
+    Reuses parse_wazuh_alert, score_ssh_alert, generate_investigation_summary,
+    generate_wazuh_query, and generate_defender_kql.
+
+    Returns a complete SOC triage package:
+    - alert_summary: parsed observables from the Wazuh alert file
+    - risk_score: severity, confidence, priority, and reasoning
+    - investigation_summary: executive summary and recommended actions
+    - recommended_queries: Wazuh/OpenSearch and Defender/Sentinel KQL examples
 
     Optional enrichment (passed to score_ssh_alert) improves scoring when the
     analyst has context beyond the alert file:
@@ -469,10 +476,30 @@ def investigate_ssh_alert(
         )
     )
 
+    wazuh_queries = json.loads(
+        generate_wazuh_query(
+            source_ip=obs["source_ip"],
+            agent_name=obs["host"],
+            rule_id=str(obs["rule_id"]),
+        )
+    )
+
+    defender_queries = json.loads(
+        generate_defender_kql(
+            source_ip=obs["source_ip"],
+            device_name=obs["host"],
+            target_user=obs["target_user"],
+        )
+    )
+
     result = {
         "alert_summary": parsed,
         "risk_score": scored,
         "investigation_summary": summary,
+        "recommended_queries": {
+            "wazuh_opensearch": wazuh_queries,
+            "defender_sentinel": defender_queries,
+        },
     }
 
     return json.dumps(result, indent=2)
