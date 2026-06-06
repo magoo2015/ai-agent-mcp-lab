@@ -421,6 +421,125 @@ def generate_investigation_summary(
 
 
 @mcp.tool()
+def generate_soc_ticket_note(
+    source_ip: str,
+    target_user: str,
+    host: str,
+    severity: str,
+    confidence_score: int,
+    priority: str,
+    rule_id: str,
+    rule_description: str,
+    recommended_action: str,
+) -> str:
+    """
+    Generate a clean SOC ticket note suitable for ServiceNow, Jira, or IBM SOAR.
+    Returns structured JSON with a paste-ready ticket note (no API calls).
+    """
+    summary = (
+        f"SSH authentication failure for user {target_user} on host {host}, "
+        f"sourced from {source_ip}. Wazuh rule {rule_id} ({rule_description}) "
+        f"triggered this alert."
+    )
+
+    observables_block = (
+        f"- Source IP: {source_ip}\n"
+        f"- Target User: {target_user}\n"
+        f"- Host: {host}\n"
+        f"- Rule ID: {rule_id}\n"
+        f"- Rule Description: {rule_description}"
+    )
+
+    severity_key = severity.lower()
+    if confidence_score <= 39:
+        confidence_label = "low"
+    elif confidence_score <= 69:
+        confidence_label = "moderate"
+    else:
+        confidence_label = "high"
+
+    severity_priority_block = (
+        f"- Severity: {severity_key}\n"
+        f"- Priority: {priority}\n"
+        f"- Confidence Score: {confidence_score}/100 ({confidence_label})"
+    )
+
+    if severity_key == "low":
+        analysis = (
+            f"This alert indicates a failed SSH login attempt against {target_user} "
+            f"on {host} from {source_ip}. Current severity is {severity_key} with "
+            f"{confidence_label} confidence ({confidence_score}/100). "
+            f"Single or isolated failures may reflect misconfiguration or routine "
+            f"scanning; immediate compromise is unlikely without corroborating indicators."
+        )
+        next_steps = [
+            "Continue monitoring for repeated failures from the same source IP.",
+            f"Verify whether {source_ip} is an authorized origin for SSH access.",
+            "Reassess priority if failure volume increases or a successful login follows.",
+        ]
+    elif severity_key == "medium":
+        analysis = (
+            f"Multiple indicators suggest this SSH failure warrants investigation. "
+            f"User {target_user} on {host} was targeted from {source_ip} under "
+            f"rule {rule_id}. Severity is {severity_key} with {confidence_label} "
+            f"confidence ({confidence_score}/100). Correlation with other auth "
+            f"events and asset context is needed before closing."
+        )
+        next_steps = [
+            f"Search auth logs for additional events from {source_ip} on {host}.",
+            "Correlate with other alerts on this host in the last 24 hours.",
+            f"Confirm authorization for {source_ip} to access {target_user}.",
+            "Update ticket severity if new evidence emerges.",
+        ]
+    else:
+        analysis = (
+            f"High-severity SSH authentication activity detected: {target_user} "
+            f"on {host} from {source_ip}. Confidence is {confidence_label} "
+            f"({confidence_score}/100) under rule {rule_id}. "
+            f"Unauthorized access or active attack patterns may be in progress; "
+            f"prompt validation and potential escalation are required."
+        )
+        next_steps = [
+            f"Escalate per {priority} procedures and notify on-call if applicable.",
+            f"Review active sessions and recent command history on {host}.",
+            f"Evaluate blocking {source_ip} if unauthorized access is confirmed.",
+            "Preserve logs and artifacts for potential incident response.",
+        ]
+
+    next_steps_block = "\n".join(f"- {step}" for step in next_steps)
+
+    ticket_note = (
+        f"1. SUMMARY\n"
+        f"{summary}\n\n"
+        f"2. OBSERVABLES\n"
+        f"{observables_block}\n\n"
+        f"3. SEVERITY / PRIORITY\n"
+        f"{severity_priority_block}\n\n"
+        f"4. ANALYSIS\n"
+        f"{analysis}\n\n"
+        f"5. RECOMMENDED ACTION\n"
+        f"{recommended_action}\n\n"
+        f"6. NEXT STEPS\n"
+        f"{next_steps_block}"
+    )
+
+    analyst_note = (
+        "This tool formats investigation findings into a paste-ready ticket note "
+        "for ServiceNow, Jira, or IBM SOAR. Review and edit before submission; "
+        "add timestamps, ticket IDs, and environment-specific context as needed. "
+        "No tickets are created automatically from this MCP server."
+    )
+
+    result = {
+        "status": "ok",
+        "ticket_note": ticket_note,
+        "analyst_note": analyst_note,
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 def investigate_ssh_alert(
     file_path: str,
     failures_last_10_minutes: int = 1,
