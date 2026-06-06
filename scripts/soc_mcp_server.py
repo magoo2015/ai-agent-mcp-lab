@@ -540,6 +540,107 @@ def generate_soc_ticket_note(
 
 
 @mcp.tool()
+def recommend_next_action(
+    severity: str,
+    confidence_score: int,
+    priority: str,
+) -> str:
+    """
+    Recommend the next investigative step based on alert severity and confidence.
+    Returns structured JSON only (no API calls).
+    """
+    severity_key = severity.lower()
+
+    if confidence_score >= 80:
+        recommended_action = "Escalate and begin containment review"
+    elif confidence_score >= 60:
+        recommended_action = "Gather additional evidence"
+    else:
+        recommended_action = "Continue investigation before escalation"
+
+    if severity_key == "high":
+        recommended_tool = "generate_soc_ticket_note"
+    elif confidence_score >= 80:
+        recommended_tool = "generate_soc_ticket_note"
+    elif confidence_score >= 60:
+        recommended_tool = "generate_wazuh_query"
+    else:
+        recommended_tool = "generate_investigation_summary"
+
+    if severity_key == "low":
+        severity_sentence = (
+            f"Severity is low ({priority}), so immediate escalation is usually not required."
+        )
+    elif severity_key == "medium":
+        severity_sentence = (
+            f"Severity is medium ({priority}), so targeted investigation is appropriate."
+        )
+    else:
+        severity_sentence = (
+            f"Severity is high ({priority}), so prompt analyst attention is warranted."
+        )
+
+    if confidence_score >= 80:
+        confidence_sentence = (
+            f"Confidence is {confidence_score}/100 (high), supporting escalation "
+            "and containment review."
+        )
+    elif confidence_score >= 60:
+        confidence_sentence = (
+            f"Confidence is {confidence_score}/100 (moderate), so more telemetry "
+            "should be collected before closing or escalating."
+        )
+    else:
+        confidence_sentence = (
+            f"Confidence is {confidence_score}/100 (low), so the case needs more "
+            "investigation before escalation decisions."
+        )
+
+    reasoning = (
+        f"{severity_sentence} {confidence_sentence} "
+        f"Recommended action: {recommended_action}."
+    )
+
+    if severity_key == "high":
+        analyst_guidance = (
+            f"High severity ({priority}) with confidence {confidence_score}/100 means "
+            "this case should be documented and handed off promptly. Use "
+            "generate_soc_ticket_note to produce a paste-ready ticket note for "
+            "ServiceNow, Jira, or SOAR, then follow your escalation playbook."
+        )
+    elif confidence_score >= 80:
+        analyst_guidance = (
+            f"Confidence {confidence_score}/100 crosses the escalation threshold even "
+            f"at {severity_key} severity ({priority}). Begin containment review: "
+            "validate active sessions, preserve logs, and use generate_soc_ticket_note "
+            "to record findings for the incident queue."
+        )
+    elif confidence_score >= 60:
+        analyst_guidance = (
+            f"Confidence {confidence_score}/100 is moderate for {severity_key} severity "
+            f"({priority}). Hunt for corroborating events before escalating. "
+            "Use generate_wazuh_query (and generate_defender_kql if applicable) to "
+            "build manual SIEM queries, then reassess severity and confidence."
+        )
+    else:
+        analyst_guidance = (
+            f"Confidence {confidence_score}/100 is still low for {severity_key} severity "
+            f"({priority}). Expand context with parse_wazuh_alert, score_ssh_alert, "
+            "and generate_investigation_summary to structure what is known so far. "
+            "Escalate only if new evidence raises confidence or severity."
+        )
+
+    result = {
+        "recommended_action": recommended_action,
+        "reasoning": reasoning,
+        "recommended_tool": recommended_tool,
+        "analyst_guidance": analyst_guidance,
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 def investigate_ssh_alert(
     file_path: str,
     failures_last_10_minutes: int = 1,
@@ -548,15 +649,17 @@ def investigate_ssh_alert(
 ) -> str:
     """
     Run a full SSH failed-login investigation from a Wazuh alert file:
-    parse, score, summarize, and generate recommended hunt queries. No API calls.
+    parse, score, summarize, generate hunt queries, and recommend the next
+    analyst action. No API calls.
     Reuses parse_wazuh_alert, score_ssh_alert, generate_investigation_summary,
-    generate_wazuh_query, and generate_defender_kql.
+    generate_wazuh_query, generate_defender_kql, and recommend_next_action.
 
     Returns a complete SOC triage package:
     - alert_summary: parsed observables from the Wazuh alert file
     - risk_score: severity, confidence, priority, and reasoning
     - investigation_summary: executive summary and recommended actions
     - recommended_queries: Wazuh/OpenSearch and Defender/Sentinel KQL examples
+    - next_action: recommended investigative step based on severity and confidence
 
     Optional enrichment (passed to score_ssh_alert) improves scoring when the
     analyst has context beyond the alert file:
@@ -611,6 +714,14 @@ def investigate_ssh_alert(
         )
     )
 
+    next_action = json.loads(
+        recommend_next_action(
+            severity=scored["severity"],
+            confidence_score=scored["confidence_score"],
+            priority=scored["priority"],
+        )
+    )
+
     result = {
         "alert_summary": parsed,
         "risk_score": scored,
@@ -619,6 +730,7 @@ def investigate_ssh_alert(
             "wazuh_opensearch": wazuh_queries,
             "defender_sentinel": defender_queries,
         },
+        "next_action": next_action,
     }
 
     return json.dumps(result, indent=2)
