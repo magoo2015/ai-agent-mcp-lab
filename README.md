@@ -356,6 +356,257 @@ The `investigate_ssh_alert` tool returns a complete SOC triage package:
 
 This allows an analyst to move from a raw Wazuh alert to a structured investigation package in one MCP tool call.
 
+## Current MCP Tools
+
+### identify_alert_type
+
+Purpose:
+
+Classify Wazuh alerts and recommend the correct investigation workflow.
+
+Current classifications:
+
+| Alert Type       | Workflow              |
+| ---------------- | --------------------- |
+| ssh_auth_failure | investigate_ssh_alert |
+| unknown          | manual_review         |
+
+Example:
+
+```json
+{
+  "alert_type": "ssh_auth_failure",
+  "recommended_workflow": "investigate_ssh_alert",
+  "confidence": "high"
+}
+```
+
+---
+
+### parse_wazuh_alert
+
+Purpose:
+
+Parse Wazuh alert JSON and extract security observables.
+
+Extracted fields include:
+
+- Source IP
+- Source Port
+- Target User
+- Host
+- Rule Information
+- Decoder
+- Raw Log
+
+---
+
+### score_ssh_alert
+
+Purpose:
+
+Assign severity, confidence, and priority using rule-based logic.
+
+Factors currently include:
+
+- Failed login activity
+- Root account targeting
+- Brute-force volume
+- Success after failure
+- Known administrative source hosts
+
+Outputs:
+
+- Severity
+- Confidence Score
+- Priority
+- Recommended Next Steps
+
+---
+
+### generate_wazuh_query
+
+Purpose:
+
+Generate OpenSearch/Wazuh hunting queries.
+
+Outputs:
+
+- OpenSearch JSON query
+- Discover filter syntax
+- Analyst guidance
+
+---
+
+### generate_defender_kql
+
+Purpose:
+
+Generate Microsoft Defender and Sentinel hunting queries.
+
+Outputs:
+
+- Defender Advanced Hunting query
+- Sentinel Syslog query
+- Investigation guidance
+
+---
+
+### generate_investigation_summary
+
+Purpose:
+
+Create analyst-ready investigation summaries.
+
+Outputs:
+
+- Executive Summary
+- Risk Assessment
+- Recommended Actions
+- Analyst Notes
+
+---
+
+### generate_soc_ticket_note
+
+Purpose:
+
+Generate ticket-ready notes for:
+
+- ServiceNow
+- Jira
+- IBM SOAR
+- Other case management platforms
+
+Outputs:
+
+- Summary
+- Observables
+- Severity/Priority
+- Analysis
+- Recommended Actions
+- Next Steps
+
+---
+
+### recommend_next_action
+
+Purpose:
+
+Recommend analyst actions based on severity and confidence.
+
+Examples:
+
+| Confidence | Recommendation                        |
+| ---------- | ------------------------------------- |
+| >= 80      | Escalate and begin containment review |
+| 60-79      | Gather additional evidence            |
+| < 60       | Continue investigation                |
+
+Outputs:
+
+- Recommended Action
+- Reasoning
+- Recommended Tool
+- Analyst Guidance
+
+---
+
+### investigate_ssh_alert
+
+Purpose:
+
+Perform a complete SSH authentication failure investigation workflow.
+
+Workflow:
+
+```text
+Wazuh Alert
+    ↓
+parse_wazuh_alert
+    ↓
+score_ssh_alert
+    ↓
+generate_investigation_summary
+    ↓
+generate_wazuh_query
+    ↓
+generate_defender_kql
+    ↓
+recommend_next_action
+    ↓
+Return Complete Investigation Package
+```
+
+Returns:
+
+```json
+{
+  "alert_summary": {},
+  "risk_score": {},
+  "investigation_summary": {},
+  "recommended_queries": {},
+  "next_action": {}
+}
+```
+
+---
+
+## Current Investigation Workflow
+
+```text
+Raw Wazuh Alert
+        │
+        ▼
+identify_alert_type
+        │
+        ▼
+investigate_ssh_alert
+        │
+        ▼
+Alert Summary
+Risk Score
+Investigation Summary
+Recommended Queries
+Next Action
+```
+
+---
+
+## Current Status
+
+Implemented:
+
+- Custom Python MCP Server
+- Wazuh Alert Parsing
+- SSH Authentication Failure Investigation
+- Severity Scoring
+- OpenSearch Query Generation
+- Defender/Sentinel Query Generation
+- Investigation Summary Generation
+- Ticket Note Generation
+- Analyst Decision Recommendations
+- Alert Type Routing
+
+The project currently supports:
+
+- SSH Authentication Failure investigations
+
+Planned future support:
+
+- Malware Detection
+- Suspicious PowerShell Activity
+- Privilege Escalation
+- Persistence Mechanisms
+- Threat Intelligence Enrichment
+- Multi-alert Correlation
+- Detection Engineering Recommendations
+- Additional SIEM Platforms (QRadar, Splunk)
+
+```
+
+```
+
 ---
 
 # Author

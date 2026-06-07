@@ -62,6 +62,77 @@ def parse_wazuh_alert(file_path: str) -> str:
 
 
 @mcp.tool()
+def identify_alert_type(file_path: str) -> str:
+    """
+    Classify a Wazuh alert and recommend the correct investigation workflow.
+    Reads the alert JSON file and inspects rule.id, rule.description,
+    decoder.name, and full_log. No API calls.
+    """
+    requested_path = (LAB_ROOT / file_path).resolve()
+
+    if not str(requested_path).startswith(str(LAB_ROOT)):
+        return "Error: File path is outside the allowed lab directory."
+
+    if not requested_path.exists():
+        return f"Error: File not found: {file_path}"
+
+    with open(requested_path, "r") as f:
+        alert = json.load(f)
+
+    rule = alert.get("rule", {})
+    decoder = alert.get("decoder", {})
+    full_log = alert.get("full_log", "")
+
+    rule_id = rule.get("id")
+    rule_description = rule.get("description", "")
+    decoder_name = decoder.get("name", "")
+
+    detected_fields = {
+        "rule_id": rule_id,
+        "rule_description": rule_description,
+        "decoder_name": decoder_name,
+        "full_log": full_log,
+    }
+
+    matches = []
+    if "sshd" in decoder_name.lower():
+        matches.append("decoder.name contains 'sshd'")
+    if "ssh" in rule_description.lower():
+        matches.append("rule.description contains 'ssh'")
+    if "Failed password" in full_log:
+        matches.append("full_log contains 'Failed password'")
+
+    if matches:
+        result = {
+            "status": "ok",
+            "alert_type": "ssh_auth_failure",
+            "recommended_workflow": "investigate_ssh_alert",
+            "confidence": "high",
+            "reasoning": (
+                "Alert matched SSH authentication failure indicators: "
+                + "; ".join(matches)
+                + ". Use investigate_ssh_alert for the full triage workflow."
+            ),
+            "detected_fields": detected_fields,
+        }
+    else:
+        result = {
+            "status": "ok",
+            "alert_type": "unknown",
+            "recommended_workflow": "manual_review",
+            "confidence": "low",
+            "reasoning": (
+                "No known alert type matched. decoder.name did not contain 'sshd', "
+                "rule.description did not contain 'ssh', and full_log did not contain "
+                "'Failed password'. Manual analyst review is recommended."
+            ),
+            "detected_fields": detected_fields,
+        }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 def score_ssh_alert(
     source_ip: str,
     target_user: str,
