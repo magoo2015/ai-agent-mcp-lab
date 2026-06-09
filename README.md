@@ -104,23 +104,21 @@ MCP allows AI models to use tools instead of relying only on conversation contex
 
 # Current Architecture
 
-```text
-                    Wazuh Alert
-                         │
-                         ▼
-              identify_alert_type
-                         │
-        ┌────────────────┴────────────────┐
-        │                                 │
-        ▼                                 ▼
- ssh_auth_failure        suspicious_command_execution
-        │                                 │
-        ▼                                 ▼
- investigate_ssh_alert    investigate_command_execution
-        │                                 │
-        ▼                                 ▼
- Investigation Package     Investigation Package
-```
+Alert
+↓
+Investigation Workflow
+↓
+Investigation Summary
+↓
+Recommended Queries
+↓
+Next Action Recommendation
+↓
+Detection Recommendation
+↓
+SOC Investigation Package
+
+````
 
 ---
 
@@ -146,7 +144,7 @@ generate_defender_kql
 recommend_next_action
     ↓
 generate_soc_ticket_note
-```
+````
 
 ---
 
