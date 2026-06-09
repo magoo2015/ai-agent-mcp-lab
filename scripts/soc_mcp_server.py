@@ -1092,5 +1092,126 @@ def investigate_command_execution(
     return json.dumps(result, indent=2)
 
 
+@mcp.tool()
+def generate_detection_recommendation(
+    alert_type: str,
+    severity: str,
+    confidence_score: int,
+    mitre_techniques: list[str] | None = None,
+) -> str:
+    """
+    Recommend ways to improve future detection coverage after an investigated alert.
+    Returns structured JSON with detection gaps, recommended detections, telemetry
+    needs, MITRE coverage, and engineering notes. No API calls.
+
+    Inputs come from a completed investigation (for example, investigate_ssh_alert
+    or investigate_command_execution). confidence_score is accepted for workflow
+    consistency but does not change the core recommendations.
+    """
+    if mitre_techniques is None:
+        mitre_techniques = []
+
+    severity_key = severity.lower()
+
+    if alert_type == "ssh_auth_failure":
+        detection_gaps = [
+            "Missing brute-force correlation detection",
+            "Missing success-after-failure detection",
+        ]
+        recommended_detections = [
+            "Alert on >10 failed SSH logins in 10 minutes",
+            "Alert on successful SSH login following repeated failures",
+            "Alert on root login from uncommon source IP",
+        ]
+        telemetry_recommendations = [
+            "SSH authentication logs",
+            "PAM logs",
+            "Process creation logs",
+        ]
+        mitre_coverage = [
+            "T1110 Brute Force",
+            "T1078 Valid Accounts",
+        ]
+        engineering_notes = [
+            "Consider Sigma rule creation",
+            "Consider Sentinel analytic rule",
+            "Consider Wazuh correlation rule",
+        ]
+    elif alert_type == "suspicious_command_execution":
+        detection_gaps = [
+            "Missing download-and-execute detection",
+            "Missing command-line monitoring",
+        ]
+        recommended_detections = [
+            "curl immediately followed by bash",
+            "wget followed by shell execution",
+            "powershell encoded commands",
+            "certutil downloads",
+        ]
+        telemetry_recommendations = [
+            "Process creation logging",
+            "Command-line auditing",
+            "Network connection logging",
+        ]
+        mitre_coverage = [
+            "T1105 Ingress Tool Transfer",
+            "T1059 Command and Scripting Interpreter",
+            "T1027 Obfuscated Files or Information",
+        ]
+        engineering_notes = [
+            "Create Sigma detections",
+            "Create Sentinel analytics",
+            "Create Defender custom detections",
+        ]
+    else:
+        detection_gaps = [
+            "Missing baseline behavioral detection",
+            "Missing cross-source correlation",
+        ]
+        recommended_detections = [
+            "Alert on rare or first-seen event patterns",
+            "Alert on anomalous sequences involving the same host or user",
+        ]
+        telemetry_recommendations = [
+            "Authentication logs",
+            "Process creation logging",
+            "Network connection logging",
+        ]
+        if mitre_techniques:
+            mitre_coverage = list(mitre_techniques)
+        else:
+            mitre_coverage = [
+                "Review MITRE ATT&CK mapping for this alert family",
+            ]
+        engineering_notes = [
+            "Document alert type and observables before building rules",
+            "Review existing SIEM rules for overlap",
+            "Consider Sigma or vendor-native rule formats",
+        ]
+
+    if mitre_techniques and alert_type in (
+        "ssh_auth_failure",
+        "suspicious_command_execution",
+    ):
+        engineering_notes.append(
+            "Investigation mapped techniques: " + ", ".join(mitre_techniques)
+        )
+
+    if severity_key == "high":
+        engineering_notes.append("Prioritize engineering work")
+        engineering_notes.append("Validate existing detections immediately")
+
+    result = {
+        "status": "ok",
+        "detection_gaps": detection_gaps,
+        "recommended_detections": recommended_detections,
+        "telemetry_recommendations": telemetry_recommendations,
+        "mitre_coverage": mitre_coverage,
+        "engineering_notes": engineering_notes,
+    }
+
+    return json.dumps(result, indent=2)
+
+
 if __name__ == "__main__":
     mcp.run()
