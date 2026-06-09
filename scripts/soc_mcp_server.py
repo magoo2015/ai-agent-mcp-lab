@@ -785,7 +785,8 @@ def investigate_ssh_alert(
     parse, score, summarize, generate hunt queries, and recommend the next
     analyst action. No API calls.
     Reuses parse_wazuh_alert, score_ssh_alert, generate_investigation_summary,
-    generate_wazuh_query, generate_defender_kql, and recommend_next_action.
+    generate_wazuh_query, generate_defender_kql, recommend_next_action, and
+    generate_detection_recommendation.
 
     Returns a complete SOC triage package:
     - alert_summary: parsed observables from the Wazuh alert file
@@ -793,6 +794,7 @@ def investigate_ssh_alert(
     - investigation_summary: executive summary and recommended actions
     - recommended_queries: Wazuh/OpenSearch and Defender/Sentinel KQL examples
     - next_action: recommended investigative step based on severity and confidence
+    - detection_recommendations: post-investigation detection engineering guidance
 
     Optional enrichment (passed to score_ssh_alert) improves scoring when the
     analyst has context beyond the alert file:
@@ -855,6 +857,14 @@ def investigate_ssh_alert(
         )
     )
 
+    detection_recommendations = json.loads(
+        generate_detection_recommendation(
+            alert_type="ssh_auth_failure",
+            severity=scored["severity"],
+            confidence_score=scored["confidence_score"],
+        )
+    )
+
     result = {
         "alert_summary": parsed,
         "risk_score": scored,
@@ -864,6 +874,7 @@ def investigate_ssh_alert(
             "defender_sentinel": defender_queries,
         },
         "next_action": next_action,
+        "detection_recommendations": detection_recommendations,
     }
 
     return json.dumps(result, indent=2)
@@ -879,8 +890,9 @@ def investigate_command_execution(
     """
     Analyze suspicious command execution activity such as curl, wget, bash,
     powershell, encoded commands, certutil, or payload download behavior.
-    Returns structured JSON with scoring, MITRE mapping, hunt queries, and
-    analyst guidance. No API calls.
+    Returns structured JSON with scoring, MITRE mapping, hunt queries,
+    analyst guidance, and detection recommendations. No API calls.
+    Reuses generate_detection_recommendation.
     """
     if not command or not command.strip():
         return json.dumps(
@@ -1073,6 +1085,15 @@ def investigate_command_execution(
         f"{confidence_note} {indicator_note} {enrichment_note} {query_note}"
     )
 
+    detection_recommendations = json.loads(
+        generate_detection_recommendation(
+            alert_type="suspicious_command_execution",
+            severity=severity,
+            confidence_score=confidence_score,
+            mitre_techniques=[entry["technique_id"] for entry in mitre_entries],
+        )
+    )
+
     result = {
         "status": "ok",
         "command_summary": command_summary,
@@ -1087,6 +1108,7 @@ def investigate_command_execution(
         },
         "recommended_actions": recommended_actions,
         "analyst_notes": analyst_notes,
+        "detection_recommendations": detection_recommendations,
     }
 
     return json.dumps(result, indent=2)

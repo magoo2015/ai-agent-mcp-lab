@@ -512,6 +512,8 @@ Completed:
 
 ✅ Detection Engineering Recommendations
 
+✅ Detection Recommendations Embedded in Investigation Workflows
+
 ---
 
 # Planned Future Enhancements
