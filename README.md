@@ -387,6 +387,44 @@ Generates:
 
 ---
 
+### generate_detection_recommendation
+
+Purpose:
+
+Recommend detection engineering improvements based on investigation findings.
+
+Inputs:
+
+- Alert Type
+- Severity
+- Confidence Score
+- MITRE Techniques
+
+Outputs:
+
+- Detection Gaps
+- Recommended Detections
+- Telemetry Recommendations
+- MITRE Coverage
+- Engineering Notes
+
+Examples:
+
+SSH Authentication Failures:
+
+- Brute-force correlation detections
+- Success-after-failure detections
+- Root login anomaly detections
+
+Suspicious Command Execution:
+
+- Download-and-execute detections
+- PowerShell encoded command detections
+- Certutil abuse detections
+- Command-line monitoring recommendations
+
+---
+
 # Current Supported Alert Types
 
 ## SSH Authentication Failure
@@ -473,6 +511,8 @@ Completed:
 ✅ SOC Ticket Note Generation
 
 ✅ Analyst Decision Recommendations
+
+✅ Detection Engineering Recommendations
 
 ---
 
