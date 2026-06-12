@@ -98,6 +98,63 @@ def _format_sigma_tags(mitre_techniques: list[str]) -> str:
     return "tags:\n" + "\n".join(tag_lines)
 
 
+def _build_engineering_summary(
+    alert_type: str,
+    severity: str,
+    confidence_score: int,
+    mitre_techniques: list[str],
+    detection_recommendations: dict,
+    sigma_rule: dict,
+) -> dict:
+    gaps = detection_recommendations.get("detection_gaps", [])
+    if gaps:
+        gap_list = "; ".join(gaps)
+        detection_gap_summary = (
+            f"For alert type '{alert_type}', current detection gaps include: {gap_list}."
+        )
+    else:
+        detection_gap_summary = (
+            f"No specific detection gaps were listed for alert type '{alert_type}'."
+        )
+
+    mitre_coverage = detection_recommendations.get("mitre_coverage", [])
+    coverage_text = ", ".join(mitre_coverage) if mitre_coverage else "none listed"
+    if mitre_techniques:
+        mapped = ", ".join(mitre_techniques)
+        mitre_coverage_summary = (
+            f"Recommended MITRE coverage: {coverage_text}. "
+            f"Investigation mapped techniques: {mapped}."
+        )
+    else:
+        mitre_coverage_summary = f"Recommended MITRE coverage: {coverage_text}."
+
+    recommended_engineering_actions = (
+        detection_recommendations.get("recommended_detections", [])
+        + detection_recommendations.get("telemetry_recommendations", [])
+        + detection_recommendations.get("engineering_notes", [])
+    )
+
+    sigma_note = sigma_rule.get("analyst_note", "")
+    if sigma_rule.get("status") == "error":
+        analyst_note = (
+            f"{sigma_note} Detection recommendations are still included in this package, "
+            "but no Sigma rule draft was generated for this alert type. "
+            f"Case context: {severity} severity, confidence {confidence_score}/100."
+        )
+    else:
+        analyst_note = (
+            f"{sigma_note} Case context: {severity} severity, "
+            f"confidence {confidence_score}/100. Review and tune before deployment."
+        )
+
+    return {
+        "detection_gap_summary": detection_gap_summary,
+        "mitre_coverage_summary": mitre_coverage_summary,
+        "recommended_engineering_actions": recommended_engineering_actions,
+        "analyst_note": analyst_note,
+    }
+
+
 @mcp.tool()
 def identify_alert_type(file_path: str) -> str:
     """
@@ -1350,6 +1407,67 @@ level: {level}{tags_suffix}"""
         "status": "ok",
         "sigma_rule": sigma_rule,
         "analyst_note": analyst_note,
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def generate_detection_package(
+    alert_type: str,
+    severity: str,
+    confidence_score: int,
+    mitre_techniques: list[str] | None = None,
+) -> str:
+    """
+    Bundle detection engineering outputs into a single package after investigation.
+    Reuses generate_detection_recommendation and generate_sigma_rule. No API calls
+    and no automatic rule deployment.
+
+    Inputs typically come from investigate_ssh_alert or investigate_command_execution:
+    alert_type, severity, confidence_score, and optional mitre_techniques.
+
+    Sigma rule drafts support ssh_auth_failure and suspicious_command_execution.
+    Other alert types still receive generic detection recommendations.
+
+    Returns JSON with:
+    - detection_recommendations: gaps, detections, telemetry, MITRE, engineering notes
+    - sigma_rule: YAML draft and analyst note (or error for unsupported alert types)
+    - engineering_summary: beginner-friendly rollup for analysts
+    """
+    if mitre_techniques is None:
+        mitre_techniques = []
+
+    detection_recommendations = json.loads(
+        generate_detection_recommendation(
+            alert_type=alert_type,
+            severity=severity,
+            confidence_score=confidence_score,
+            mitre_techniques=mitre_techniques,
+        )
+    )
+
+    sigma_rule = json.loads(
+        generate_sigma_rule(
+            alert_type=alert_type,
+            severity=severity,
+            mitre_techniques=mitre_techniques,
+        )
+    )
+
+    engineering_summary = _build_engineering_summary(
+        alert_type=alert_type,
+        severity=severity,
+        confidence_score=confidence_score,
+        mitre_techniques=mitre_techniques,
+        detection_recommendations=detection_recommendations,
+        sigma_rule=sigma_rule,
+    )
+
+    result = {
+        "detection_recommendations": detection_recommendations,
+        "sigma_rule": sigma_rule,
+        "engineering_summary": engineering_summary,
     }
 
     return json.dumps(result, indent=2)

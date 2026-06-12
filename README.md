@@ -480,6 +480,25 @@ Outputs:
 
 This tool does not deploy detections automatically. Rules should be reviewed, tested, tuned, and converted to the target SIEM format before production use.
 
+### generate_detection_package
+
+Bundles detection engineering outputs into a single package.
+
+Reuses:
+
+- generate_detection_recommendation
+- generate_sigma_rule
+
+Outputs:
+
+- Detection Recommendations
+- Sigma Rule Draft
+- Engineering Summary
+
+Purpose:
+
+Helps move from alert investigation to detection engineering by identifying detection gaps, recommending improved coverage, and drafting Sigma detection logic.
+
 ---
 
 # Key Security Concepts Practiced
