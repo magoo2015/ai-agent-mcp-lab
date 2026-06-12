@@ -1,0 +1,2 @@
+# MCP Python SDK — used by scripts/soc_mcp_server.py (FastMCP)
+mcp>=1.27.0

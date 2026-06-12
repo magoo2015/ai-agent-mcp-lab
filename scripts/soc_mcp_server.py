@@ -72,6 +72,31 @@ COMMAND_EXECUTION_INDICATORS = [
     "certutil",
 ]
 
+SIGMA_LEVELS = {"informational", "low", "medium", "high", "critical"}
+
+
+def _sigma_level_from_severity(severity: str) -> str:
+    level = severity.lower()
+    if level in SIGMA_LEVELS:
+        return level
+    return "medium"
+
+
+def _format_sigma_tags(mitre_techniques: list[str]) -> str:
+    if not mitre_techniques:
+        return ""
+
+    tag_lines = []
+    for technique in mitre_techniques:
+        normalized = technique.strip().lower()
+        if normalized.startswith("attack."):
+            tag_lines.append(f"    - {normalized}")
+        else:
+            technique_id = normalized.lstrip("t")
+            tag_lines.append(f"    - attack.t{technique_id}")
+
+    return "tags:\n" + "\n".join(tag_lines)
+
 
 @mcp.tool()
 def identify_alert_type(file_path: str) -> str:
@@ -1230,6 +1255,101 @@ def generate_detection_recommendation(
         "telemetry_recommendations": telemetry_recommendations,
         "mitre_coverage": mitre_coverage,
         "engineering_notes": engineering_notes,
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def generate_sigma_rule(
+    alert_type: str,
+    title: str = "",
+    severity: str = "medium",
+    mitre_techniques: list[str] | None = None,
+) -> str:
+    """
+    Generate a beginner-friendly Sigma detection rule draft from a supported
+    alert type. Returns JSON with a YAML rule string (no API calls).
+    """
+    if mitre_techniques is None:
+        mitre_techniques = []
+
+    level = _sigma_level_from_severity(severity)
+    tags_block = _format_sigma_tags(mitre_techniques)
+    tags_suffix = f"\n{tags_block}" if tags_block else ""
+
+    if alert_type == "ssh_auth_failure":
+        rule_title = title or "Repeated SSH Failed Logins"
+        sigma_rule = f"""title: {rule_title}
+status: experimental
+description: Detects repeated SSH authentication failures in Linux sshd logs.
+logsource:
+    product: linux
+    service: sshd
+detection:
+    keywords:
+        - 'Failed password'
+        - 'sshd'
+    condition: keywords
+falsepositives:
+    - Mistyped admin password
+    - Misconfigured automation
+level: {level}{tags_suffix}"""
+
+        analyst_note = (
+            "This tool returns a Sigma rule draft with status experimental. "
+            "Keyword matching on 'Failed password' and 'sshd' is a starting point; "
+            "you will likely need correlation or threshold logic (for example, "
+            "multiple failures in a time window) before production use. "
+            "Test in your environment, tune false positives, and convert to "
+            "Wazuh, Sentinel, or other vendor formats manually. "
+            "No rules are deployed automatically from this MCP server."
+        )
+
+    elif alert_type == "suspicious_command_execution":
+        rule_title = title or "Suspicious Download and Execute Command"
+        sigma_rule = f"""title: {rule_title}
+status: experimental
+description: Detects suspicious download-and-execute command patterns on Linux hosts.
+logsource:
+    product: linux
+detection:
+    keywords:
+        - 'curl'
+        - 'wget'
+        - '| bash'
+        - 'bash -c'
+    condition: keywords
+falsepositives:
+    - Legitimate admin scripts
+    - Software installation scripts
+level: {level}{tags_suffix}"""
+
+        analyst_note = (
+            "This tool returns a Sigma rule draft with status experimental. "
+            "Command-line indicators (curl, wget, piped bash) require process "
+            "or audit telemetry on Linux hosts. Validate that your log source "
+            "captures command lines before enabling this rule. "
+            "Test in your environment, tune false positives, and convert to "
+            "Wazuh, Sentinel, or other vendor formats manually. "
+            "No rules are deployed automatically from this MCP server."
+        )
+
+    else:
+        result = {
+            "status": "error",
+            "sigma_rule": "",
+            "analyst_note": (
+                f"Unsupported alert_type '{alert_type}'. "
+                "Supported: ssh_auth_failure, suspicious_command_execution."
+            ),
+        }
+        return json.dumps(result, indent=2)
+
+    result = {
+        "status": "ok",
+        "sigma_rule": sigma_rule,
+        "analyst_note": analyst_note,
     }
 
     return json.dumps(result, indent=2)

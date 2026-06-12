@@ -461,6 +461,25 @@ Workflow:
 investigate_command_execution
 ```
 
+### generate_sigma_rule
+
+Generates beginner-friendly Sigma detection rule drafts from supported alert types.
+
+Supported use cases:
+
+- SSH authentication failures
+- Suspicious command execution
+- Linux download-and-execute behavior
+
+Outputs:
+
+- Sigma YAML rule draft
+- MITRE ATT&CK tags
+- False positive guidance
+- Analyst notes
+
+This tool does not deploy detections automatically. Rules should be reviewed, tested, tuned, and converted to the target SIEM format before production use.
+
 ---
 
 # Key Security Concepts Practiced
