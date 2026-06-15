@@ -98,6 +98,61 @@ def _format_sigma_tags(mitre_techniques: list[str]) -> str:
     return "tags:\n" + "\n".join(tag_lines)
 
 
+MITRE_TECHNIQUE_NAMES = {
+    "T1110": "Brute Force",
+    "T1078": "Valid Accounts",
+    "T1105": "Ingress Tool Transfer",
+    "T1059": "Command and Scripting Interpreter",
+    "T1059.001": "PowerShell",
+    "T1027": "Obfuscated Files or Information",
+    "T1140": "Deobfuscate/Decode Files or Information",
+}
+
+DEFAULT_MITRE_BY_ALERT_TYPE = {
+    "ssh_auth_failure": ["T1110", "T1078"],
+    "suspicious_command_execution": ["T1105", "T1059", "T1027"],
+}
+
+
+def _normalize_technique_id(technique: str) -> str:
+    normalized = technique.strip().lower()
+    if normalized.startswith("attack."):
+        normalized = normalized[7:]
+    if normalized.startswith("t"):
+        return normalized.upper()
+    return "T" + normalized.upper()
+
+
+def _mitre_technique_name(technique_id: str) -> str:
+    return MITRE_TECHNIQUE_NAMES.get(technique_id, technique_id)
+
+
+def _build_mitre_mapping(
+    alert_type: str,
+    mitre_techniques: list[str] | None = None,
+) -> list[dict]:
+    if mitre_techniques is None:
+        mitre_techniques = []
+
+    defaults = DEFAULT_MITRE_BY_ALERT_TYPE.get(alert_type, [])
+    seen: set[str] = set()
+    mapping: list[dict] = []
+
+    for tech in defaults + mitre_techniques:
+        technique_id = _normalize_technique_id(tech)
+        if technique_id in seen:
+            continue
+        seen.add(technique_id)
+        mapping.append(
+            {
+                "technique_id": technique_id,
+                "name": _mitre_technique_name(technique_id),
+            }
+        )
+
+    return mapping
+
+
 def _build_engineering_summary(
     alert_type: str,
     severity: str,
@@ -105,6 +160,7 @@ def _build_engineering_summary(
     mitre_techniques: list[str],
     detection_recommendations: dict,
     sigma_rule: dict,
+    sentinel_rule: dict | None = None,
 ) -> dict:
     gaps = detection_recommendations.get("detection_gaps", [])
     if gaps:
@@ -135,15 +191,24 @@ def _build_engineering_summary(
     )
 
     sigma_note = sigma_rule.get("analyst_note", "")
+    sentinel_note = ""
+    if sentinel_rule and sentinel_rule.get("kql"):
+        rule_name = sentinel_rule.get("rule_name", "Sentinel rule")
+        sentinel_note = (
+            f" A Sentinel analytic rule draft ({rule_name}) is also included "
+            "in this package; paste its KQL into Azure Sentinel Analytics."
+        )
+
     if sigma_rule.get("status") == "error":
         analyst_note = (
             f"{sigma_note} Detection recommendations are still included in this package, "
-            "but no Sigma rule draft was generated for this alert type. "
+            "but no Sigma rule draft was generated for this alert type."
+            f"{sentinel_note} "
             f"Case context: {severity} severity, confidence {confidence_score}/100."
         )
     else:
         analyst_note = (
-            f"{sigma_note} Case context: {severity} severity, "
+            f"{sigma_note}{sentinel_note} Case context: {severity} severity, "
             f"confidence {confidence_score}/100. Review and tune before deployment."
         )
 
@@ -1413,6 +1478,103 @@ level: {level}{tags_suffix}"""
 
 
 @mcp.tool()
+def generate_sentinel_analytic_rule(
+    alert_type: str,
+    severity: str,
+    mitre_techniques: list[str] | None = None,
+) -> str:
+    """
+    Generate a beginner-friendly Microsoft Sentinel scheduled analytic rule draft
+    from a supported alert type. Returns JSON with rule metadata and KQL
+    (no API calls, no automatic deployment).
+    """
+    if mitre_techniques is None:
+        mitre_techniques = []
+
+    severity_key = severity.lower()
+    mitre_mapping = _build_mitre_mapping(alert_type, mitre_techniques)
+
+    if alert_type == "ssh_auth_failure":
+        rule_name = "Repeated SSH Failed Logins"
+        description = (
+            "Detects brute-force SSH activity via repeated failed password "
+            "attempts in syslog."
+        )
+        kql = """// Threshold: 10 failed logins in 10 minutes from the same source IP
+let FailureThreshold = 10;
+let TimeWindow = 10m;
+Syslog
+| where TimeGenerated >= ago(1d)
+| where SyslogMessage has "Failed password"
+| where SyslogMessage has "sshd"
+| extend SourceIP = extract(@"from ([0-9.]+) port", 1, SyslogMessage)
+| where isnotempty(SourceIP)
+| summarize FailedLoginCount = count() by SourceIP, bin(TimeGenerated, TimeWindow)
+| where FailedLoginCount >= FailureThreshold"""
+        analyst_note = (
+            "This tool returns a Sentinel scheduled analytic rule draft. "
+            "Paste the KQL into Azure Sentinel → Analytics → Scheduled query rule. "
+            "The query correlates failed SSH logins by source IP over 10-minute bins; "
+            "tune FailureThreshold and TimeWindow for your environment. "
+            "Requires Syslog ingestion with sshd auth messages. "
+            "Review false positives from mistyped passwords or automation. "
+            "No rules are deployed automatically from this MCP server."
+        )
+
+    elif alert_type == "suspicious_command_execution":
+        rule_name = "Suspicious Download and Execute Command"
+        description = (
+            "Detects curl, wget, bash -c, and encoded PowerShell in "
+            "process and syslog telemetry."
+        )
+        kql = """union
+    (Syslog
+    | where TimeGenerated >= ago(1d)
+    | where SyslogMessage has_any ("curl", "wget", "bash -c")
+    | project TimeGenerated, Computer, CommandLine = SyslogMessage, DataSource = "Syslog"),
+    (DeviceProcessEvents
+    | where TimeGenerated >= ago(1d)
+    | where ProcessCommandLine has_any ("curl", "wget", "bash -c")
+        or (ProcessCommandLine has "powershell"
+            and (ProcessCommandLine has "-enc" or ProcessCommandLine has "-EncodedCommand"))
+    | project TimeGenerated, Computer = DeviceName, CommandLine = ProcessCommandLine, DataSource = "DeviceProcessEvents")"""
+        analyst_note = (
+            "This tool returns a Sentinel scheduled analytic rule draft. "
+            "Paste the KQL into Azure Sentinel → Analytics → Scheduled query rule. "
+            "The query unions Linux Syslog and Microsoft Defender DeviceProcessEvents "
+            "to catch curl, wget, bash -c, and encoded PowerShell patterns. "
+            "Validate that your tenant ingests both tables before enabling. "
+            "Tune indicators to reduce false positives from admin scripts. "
+            "No rules are deployed automatically from this MCP server."
+        )
+
+    else:
+        result = {
+            "rule_name": "",
+            "description": "",
+            "severity": "",
+            "mitre_mapping": [],
+            "kql": "",
+            "analyst_note": (
+                f"Unsupported alert_type '{alert_type}'. "
+                "Supported: ssh_auth_failure, suspicious_command_execution."
+            ),
+        }
+        return json.dumps(result, indent=2)
+
+    result = {
+        "rule_name": rule_name,
+        "description": description,
+        "severity": severity_key,
+        "mitre_mapping": mitre_mapping,
+        "kql": kql,
+        "analyst_note": analyst_note,
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 def generate_detection_package(
     alert_type: str,
     severity: str,
@@ -1421,18 +1583,20 @@ def generate_detection_package(
 ) -> str:
     """
     Bundle detection engineering outputs into a single package after investigation.
-    Reuses generate_detection_recommendation and generate_sigma_rule. No API calls
-    and no automatic rule deployment.
+    Reuses generate_detection_recommendation, generate_sigma_rule, and
+    generate_sentinel_analytic_rule. No API calls and no automatic rule deployment.
 
     Inputs typically come from investigate_ssh_alert or investigate_command_execution:
     alert_type, severity, confidence_score, and optional mitre_techniques.
 
-    Sigma rule drafts support ssh_auth_failure and suspicious_command_execution.
-    Other alert types still receive generic detection recommendations.
+    Sigma and Sentinel rule drafts support ssh_auth_failure and
+    suspicious_command_execution. Other alert types still receive generic
+    detection recommendations.
 
     Returns JSON with:
     - detection_recommendations: gaps, detections, telemetry, MITRE, engineering notes
     - sigma_rule: YAML draft and analyst note (or error for unsupported alert types)
+    - sentinel_analytic_rule: Sentinel KQL draft with MITRE mapping and analyst note
     - engineering_summary: beginner-friendly rollup for analysts
     """
     if mitre_techniques is None:
@@ -1455,6 +1619,14 @@ def generate_detection_package(
         )
     )
 
+    sentinel_rule = json.loads(
+        generate_sentinel_analytic_rule(
+            alert_type=alert_type,
+            severity=severity,
+            mitre_techniques=mitre_techniques,
+        )
+    )
+
     engineering_summary = _build_engineering_summary(
         alert_type=alert_type,
         severity=severity,
@@ -1462,11 +1634,13 @@ def generate_detection_package(
         mitre_techniques=mitre_techniques,
         detection_recommendations=detection_recommendations,
         sigma_rule=sigma_rule,
+        sentinel_rule=sentinel_rule,
     )
 
     result = {
         "detection_recommendations": detection_recommendations,
         "sigma_rule": sigma_rule,
+        "sentinel_analytic_rule": sentinel_rule,
         "engineering_summary": engineering_summary,
     }
 

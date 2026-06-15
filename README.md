@@ -499,6 +499,38 @@ Purpose:
 
 Helps move from alert investigation to detection engineering by identifying detection gaps, recommending improved coverage, and drafting Sigma detection logic.
 
+### generate_detection_package
+
+Bundles multiple detection engineering outputs into a single package.
+
+Reuses:
+
+- generate_detection_recommendation
+- generate_sigma_rule
+- generate_sentinel_analytic_rule
+
+Outputs:
+
+- Detection Recommendations
+- Sigma Rule Draft
+- Sentinel Analytic Rule Draft
+- Engineering Summary
+
+Purpose:
+
+Helps move from alert investigation to detection engineering by identifying detection gaps, recommending improved coverage, generating detection content, and providing implementation guidance.
+
+Example Workflow:
+
+investigate_command_execution
+↓
+generate_detection_package
+↓
+Detection Recommendations
+Sigma Rule
+Sentinel Rule
+Engineering Summary
+
 ---
 
 # Key Security Concepts Practiced
