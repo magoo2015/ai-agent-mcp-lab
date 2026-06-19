@@ -161,6 +161,7 @@ def _build_engineering_summary(
     detection_recommendations: dict,
     sigma_rule: dict,
     sentinel_rule: dict | None = None,
+    qradar_rule: dict | None = None,
 ) -> dict:
     gaps = detection_recommendations.get("detection_gaps", [])
     if gaps:
@@ -199,16 +200,24 @@ def _build_engineering_summary(
             "in this package; paste its KQL into Azure Sentinel Analytics."
         )
 
+    qradar_note = ""
+    if qradar_rule and qradar_rule.get("aql"):
+        rule_name = qradar_rule.get("rule_name", "QRadar rule")
+        qradar_note = (
+            f" A QRadar AQL detection draft ({rule_name}) is also included "
+            "in this package; paste its AQL into QRadar Log Activity or a Custom Rule."
+        )
+
     if sigma_rule.get("status") == "error":
         analyst_note = (
             f"{sigma_note} Detection recommendations are still included in this package, "
             "but no Sigma rule draft was generated for this alert type."
-            f"{sentinel_note} "
+            f"{sentinel_note}{qradar_note} "
             f"Case context: {severity} severity, confidence {confidence_score}/100."
         )
     else:
         analyst_note = (
-            f"{sigma_note}{sentinel_note} Case context: {severity} severity, "
+            f"{sigma_note}{sentinel_note}{qradar_note} Case context: {severity} severity, "
             f"confidence {confidence_score}/100. Review and tune before deployment."
         )
 
@@ -1575,6 +1584,118 @@ Syslog
 
 
 @mcp.tool()
+def generate_qradar_aql_detection(
+    alert_type: str,
+    severity: str,
+    mitre_techniques: list[str] | None = None,
+) -> str:
+    """
+    Generate a beginner-friendly IBM QRadar AQL detection rule draft from a
+    supported alert type. Returns JSON with rule metadata and AQL
+    (no API calls, no automatic deployment).
+
+    Supported alert types:
+    - ssh_auth_failure: repeated failed SSH logins
+    - suspicious_command_execution: curl, wget, bash -c, encoded PowerShell
+    """
+    if mitre_techniques is None:
+        mitre_techniques = []
+
+    severity_key = severity.lower()
+    mitre_mapping = _build_mitre_mapping(alert_type, mitre_techniques)
+
+    if alert_type == "ssh_auth_failure":
+        rule_name = "Repeated SSH Failed Logins"
+        description = (
+            "Detects brute-force SSH activity via repeated failed password "
+            "attempts in syslog."
+        )
+        aql = """SELECT
+  sourceIP AS SourceIP,
+  COUNT(*) AS FailedLoginCount
+FROM events
+WHERE
+  UTF8(payload) ILIKE '%Failed password%'
+  AND UTF8(payload) ILIKE '%sshd%'
+  AND sourceIP IS NOT NULL
+LAST 10 MINUTES
+GROUP BY sourceIP
+HAVING COUNT(*) >= 10"""
+        analyst_note = (
+            "This tool returns a QRadar AQL detection rule draft. "
+            "Paste the AQL into QRadar → Log Activity → New Search, or use it "
+            "as the basis for a Custom Rule. "
+            "The query correlates failed SSH logins by source IP over 10 minutes; "
+            "tune the HAVING threshold and LAST window for your environment. "
+            "Requires syslog ingestion with sshd auth messages. "
+            "Review false positives from mistyped passwords or automation. "
+            "No rules are deployed automatically from this MCP server."
+        )
+
+    elif alert_type == "suspicious_command_execution":
+        rule_name = "Suspicious Download and Execute Command"
+        description = (
+            "Detects curl, wget, bash -c, and encoded PowerShell in "
+            "event payloads."
+        )
+        aql = """SELECT
+  DATEFORMAT(starttime, 'yyyy-MM-dd HH:mm:ss') AS EventTime,
+  sourceIP AS SourceIP,
+  username AS Username,
+  UTF8(payload) AS CommandLine
+FROM events
+WHERE
+  (
+    UTF8(payload) ILIKE '%curl%'
+    OR UTF8(payload) ILIKE '%wget%'
+    OR UTF8(payload) ILIKE '%bash -c%'
+    OR (
+      UTF8(payload) ILIKE '%powershell%'
+      AND (
+        UTF8(payload) ILIKE '%-enc%'
+        OR UTF8(payload) ILIKE '%-EncodedCommand%'
+      )
+    )
+  )
+LAST 1 DAYS"""
+        analyst_note = (
+            "This tool returns a QRadar AQL detection rule draft. "
+            "Paste the AQL into QRadar → Log Activity → New Search, or use it "
+            "as the basis for a Custom Rule. "
+            "The query matches curl, wget, bash -c, and encoded PowerShell "
+            "patterns in event payloads. "
+            "Validate that your log sources ingest command or process data. "
+            "Tune indicators to reduce false positives from admin scripts. "
+            "No rules are deployed automatically from this MCP server."
+        )
+
+    else:
+        result = {
+            "rule_name": "",
+            "description": "",
+            "severity": "",
+            "mitre_mapping": [],
+            "aql": "",
+            "analyst_note": (
+                f"Unsupported alert_type '{alert_type}'. "
+                "Supported: ssh_auth_failure, suspicious_command_execution."
+            ),
+        }
+        return json.dumps(result, indent=2)
+
+    result = {
+        "rule_name": rule_name,
+        "description": description,
+        "severity": severity_key,
+        "mitre_mapping": mitre_mapping,
+        "aql": aql,
+        "analyst_note": analyst_note,
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 def generate_detection_package(
     alert_type: str,
     severity: str,
@@ -1583,13 +1704,14 @@ def generate_detection_package(
 ) -> str:
     """
     Bundle detection engineering outputs into a single package after investigation.
-    Reuses generate_detection_recommendation, generate_sigma_rule, and
-    generate_sentinel_analytic_rule. No API calls and no automatic rule deployment.
+    Reuses generate_detection_recommendation, generate_sigma_rule,
+    generate_sentinel_analytic_rule, and generate_qradar_aql_detection.
+    No API calls and no automatic rule deployment.
 
     Inputs typically come from investigate_ssh_alert or investigate_command_execution:
     alert_type, severity, confidence_score, and optional mitre_techniques.
 
-    Sigma and Sentinel rule drafts support ssh_auth_failure and
+    Sigma, Sentinel, and QRadar rule drafts support ssh_auth_failure and
     suspicious_command_execution. Other alert types still receive generic
     detection recommendations.
 
@@ -1597,6 +1719,7 @@ def generate_detection_package(
     - detection_recommendations: gaps, detections, telemetry, MITRE, engineering notes
     - sigma_rule: YAML draft and analyst note (or error for unsupported alert types)
     - sentinel_analytic_rule: Sentinel KQL draft with MITRE mapping and analyst note
+    - qradar_aql_detection: QRadar AQL draft with MITRE mapping and analyst note
     - engineering_summary: beginner-friendly rollup for analysts
     """
     if mitre_techniques is None:
@@ -1627,6 +1750,14 @@ def generate_detection_package(
         )
     )
 
+    qradar_rule = json.loads(
+        generate_qradar_aql_detection(
+            alert_type=alert_type,
+            severity=severity,
+            mitre_techniques=mitre_techniques,
+        )
+    )
+
     engineering_summary = _build_engineering_summary(
         alert_type=alert_type,
         severity=severity,
@@ -1635,12 +1766,14 @@ def generate_detection_package(
         detection_recommendations=detection_recommendations,
         sigma_rule=sigma_rule,
         sentinel_rule=sentinel_rule,
+        qradar_rule=qradar_rule,
     )
 
     result = {
         "detection_recommendations": detection_recommendations,
         "sigma_rule": sigma_rule,
         "sentinel_analytic_rule": sentinel_rule,
+        "qradar_aql_detection": qradar_rule,
         "engineering_summary": engineering_summary,
     }
 

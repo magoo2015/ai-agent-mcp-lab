@@ -18,6 +18,7 @@ This project demonstrates:
 - Detection Engineering Concepts
 - Microsoft Defender Query Generation
 - Azure Sentinel Query Generation
+- IBM QRadar AQL Detection Generation
 - Analyst Decision Support
 - AI-Assisted SOC Investigations
 
@@ -480,24 +481,32 @@ Outputs:
 
 This tool does not deploy detections automatically. Rules should be reviewed, tested, tuned, and converted to the target SIEM format before production use.
 
-### generate_detection_package
+### generate_qradar_aql_detection
 
-Bundles detection engineering outputs into a single package.
+Generates beginner-friendly IBM QRadar AQL detection rule drafts from supported alert types.
 
-Reuses:
+Inputs:
 
-- generate_detection_recommendation
-- generate_sigma_rule
+- Alert Type
+- Severity
+- MITRE Techniques (optional)
+
+Supported alert types:
+
+| Alert Type                   | Detection focus                                      |
+| ---------------------------- | ---------------------------------------------------- |
+| ssh_auth_failure             | Repeated failed SSH logins (brute-force)             |
+| suspicious_command_execution | curl, wget, bash -c, encoded PowerShell commands |
 
 Outputs:
 
-- Detection Recommendations
-- Sigma Rule Draft
-- Engineering Summary
+- Rule name and description
+- Severity
+- MITRE ATT&CK mapping
+- AQL query draft
+- Analyst notes
 
-Purpose:
-
-Helps move from alert investigation to detection engineering by identifying detection gaps, recommending improved coverage, and drafting Sigma detection logic.
+This tool does not deploy detections automatically. Paste the AQL into QRadar Log Activity or use it as the basis for a Custom Rule after review and tuning.
 
 ### generate_detection_package
 
@@ -508,12 +517,14 @@ Reuses:
 - generate_detection_recommendation
 - generate_sigma_rule
 - generate_sentinel_analytic_rule
+- generate_qradar_aql_detection
 
 Outputs:
 
 - Detection Recommendations
 - Sigma Rule Draft
 - Sentinel Analytic Rule Draft
+- QRadar AQL Detection Draft
 - Engineering Summary
 
 Purpose:
@@ -522,6 +533,7 @@ Helps move from alert investigation to detection engineering by identifying dete
 
 Example Workflow:
 
+```text
 investigate_command_execution
 ↓
 generate_detection_package
@@ -529,7 +541,9 @@ generate_detection_package
 Detection Recommendations
 Sigma Rule
 Sentinel Rule
+QRadar AQL Rule
 Engineering Summary
+```
 
 ---
 
@@ -544,6 +558,7 @@ Engineering Summary
 - OpenSearch Query Development
 - Microsoft Defender Hunting
 - Azure Sentinel Hunting
+- IBM QRadar AQL Detection
 - AI-Assisted SOC Workflows
 - MCP Tool Orchestration
 - Security Workflow Routing
@@ -574,6 +589,8 @@ Completed:
 
 ✅ Sentinel Query Generation
 
+✅ QRadar AQL Detection Generation
+
 ✅ Investigation Summary Generation
 
 ✅ SOC Ticket Note Generation
@@ -594,7 +611,6 @@ Completed:
 - Persistence Detection Workflow
 - Threat Intelligence Enrichment
 - IOC Reputation Lookups
-- QRadar AQL Query Generation
 - Splunk SPL Query Generation
 - Multi-Alert Correlation
 - Detection Engineering Recommendations
