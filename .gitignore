@@ -51,3 +51,6 @@ credentials/
 
 # Local Testing
 test-output/
+
+# Real telemetry samples
+sample_data/aihost_*.log
