@@ -300,6 +300,57 @@ Extracts observables from Wazuh alerts:
 
 ---
 
+### parse_linux_auth_log
+
+Purpose:
+
+Parse a local Linux SSH/auth log sample and extract failed and successful login events.
+
+Reads files from the lab directory only (no SSH commands, no API calls).
+
+Outputs:
+
+- Event counts
+- Failed login events
+- Successful login events
+- Unique source IPs
+- Unique users
+- Summary and analyst note
+
+Example path:
+
+```text
+sample_data/aihost_auth.log
+```
+
+---
+
+### analyze_linux_auth_activity
+
+Purpose:
+
+Analyze parsed Linux SSH/auth log activity from a local telemetry sample and produce SOC-style triage guidance.
+
+Reuses `parse_linux_auth_log` parsing logic.
+
+Outputs:
+
+- Risk level (low / medium / high)
+- Confidence score (0–100)
+- Findings
+- Recommended actions
+- Analyst notes
+- Parsed activity summary
+
+Scoring factors include:
+
+- Failed login volume (≥10 adds confidence)
+- Success-after-failure from the same source IP
+- Multiple source IPs
+- Publickey-only successful logins with zero failures (reduces confidence)
+
+---
+
 ### score_ssh_alert
 
 Calculates:
@@ -600,6 +651,14 @@ Completed:
 ✅ Detection Engineering Recommendations
 
 ✅ Detection Recommendations Embedded in Investigation Workflows
+
+✅ Real aihost telemetry parsing (`parse_linux_auth_log`, `analyze_linux_auth_activity`)
+
+---
+
+# Telemetry Samples
+
+Real telemetry samples (for example `sample_data/aihost_*.log`) are listed in `.gitignore` and should **not** be committed to the repository. Keep local auth log exports on your machine for lab use only.
 
 ---
 

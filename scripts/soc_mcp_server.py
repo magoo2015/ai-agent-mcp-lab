@@ -61,6 +61,301 @@ def parse_wazuh_alert(file_path: str) -> str:
     return json.dumps(result, indent=2)
 
 
+# Beginner-friendly regex patterns for common sshd auth log lines (lab sample format).
+_FAILED_PASSWORD_RE = re.compile(
+    r"^(?P<timestamp>\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+\S+\s+sshd\[\d+\]:\s+"
+    r"Failed password for (?:invalid user )?(?P<username>\S+) from "
+    r"(?P<source_ip>[\d.]+)"
+)
+_ACCEPTED_AUTH_RE = re.compile(
+    r"^(?P<timestamp>\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+\S+\s+sshd\[\d+\]:\s+"
+    r"Accepted (?P<auth_method>password|publickey) for (?P<username>\S+) from "
+    r"(?P<source_ip>[\d.]+)"
+)
+
+
+def _parse_linux_auth_log_data(requested_path: Path) -> dict:
+    """Parse SSH auth events from a local log file (shared by MCP tools)."""
+    failed_logins: list[dict] = []
+    successful_logins: list[dict] = []
+    source_ip_set: set[str] = set()
+    user_set: set[str] = set()
+    failure_seen_by_ip: dict[str, bool] = {}
+    success_after_failure_by_ip: dict[str, bool] = {}
+
+    with open(requested_path, "r") as f:
+        for line in f:
+            raw_log = line.rstrip("\n")
+            if not raw_log:
+                continue
+
+            if "Failed password" in raw_log:
+                match = _FAILED_PASSWORD_RE.match(raw_log)
+                if not match:
+                    continue
+                username = match.group("username")
+                source_ip = match.group("source_ip")
+                failed_logins.append(
+                    {
+                        "timestamp": match.group("timestamp"),
+                        "username": username,
+                        "source_ip": source_ip,
+                        "raw_log": raw_log,
+                    }
+                )
+                source_ip_set.add(source_ip)
+                user_set.add(username)
+                failure_seen_by_ip[source_ip] = True
+            elif "Accepted password" in raw_log or "Accepted publickey" in raw_log:
+                match = _ACCEPTED_AUTH_RE.match(raw_log)
+                if not match:
+                    continue
+                username = match.group("username")
+                source_ip = match.group("source_ip")
+                successful_logins.append(
+                    {
+                        "timestamp": match.group("timestamp"),
+                        "username": username,
+                        "source_ip": source_ip,
+                        "auth_method": match.group("auth_method"),
+                        "raw_log": raw_log,
+                    }
+                )
+                source_ip_set.add(source_ip)
+                user_set.add(username)
+                if failure_seen_by_ip.get(source_ip):
+                    success_after_failure_by_ip[source_ip] = True
+
+    source_ips = sorted(source_ip_set)
+    users = sorted(user_set)
+    event_count = len(failed_logins) + len(successful_logins)
+
+    return {
+        "event_count": event_count,
+        "failed_logins": failed_logins,
+        "successful_logins": successful_logins,
+        "source_ips": source_ips,
+        "users": users,
+        "success_after_failure_ips": sorted(success_after_failure_by_ip),
+    }
+
+
+@mcp.tool()
+def parse_linux_auth_log(file_path: str) -> str:
+    """
+    Parse a local Linux SSH/auth log sample and extract failed and successful
+    login events. Reads the file from the lab directory only (no SSH commands,
+    no API calls).
+    """
+    requested_path = (LAB_ROOT / file_path).resolve()
+
+    if not str(requested_path).startswith(str(LAB_ROOT)):
+        return "Error: File path is outside the allowed lab directory."
+
+    if not requested_path.exists():
+        return f"Error: File not found: {file_path}"
+
+    parsed = _parse_linux_auth_log_data(requested_path)
+    failed_logins = parsed["failed_logins"]
+    successful_logins = parsed["successful_logins"]
+    source_ips = parsed["source_ips"]
+    users = parsed["users"]
+    event_count = parsed["event_count"]
+
+    summary = (
+        f"Parsed {event_count} SSH auth event(s) from {file_path}: "
+        f"{len(failed_logins)} failed login(s), "
+        f"{len(successful_logins)} successful login(s), "
+        f"{len(source_ips)} unique source IP(s), "
+        f"{len(users)} unique user(s)."
+    )
+
+    result = {
+        "status": "ok",
+        "event_count": event_count,
+        "failed_logins": failed_logins,
+        "successful_logins": successful_logins,
+        "source_ips": source_ips,
+        "users": users,
+        "summary": summary,
+        "analyst_note": (
+            "This tool extracts facts from local Linux auth logs only. "
+            "Review failed_logins and successful_logins for brute-force patterns, "
+            "success-after-failure sequences, and unexpected source IPs. "
+            "The AI should determine severity, confidence, and next steps. "
+            "No SSH commands or API calls are run from this MCP server."
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def analyze_linux_auth_activity(file_path: str) -> str:
+    """
+    Analyze parsed Linux SSH/auth log activity from a local telemetry sample
+    and produce SOC-style triage guidance. Reuses parse_linux_auth_log parsing
+    logic. No SSH commands or API calls.
+    """
+    requested_path = (LAB_ROOT / file_path).resolve()
+
+    if not str(requested_path).startswith(str(LAB_ROOT)):
+        return "Error: File path is outside the allowed lab directory."
+
+    if not requested_path.exists():
+        return f"Error: File not found: {file_path}"
+
+    parsed = _parse_linux_auth_log_data(requested_path)
+
+    failed_count = len(parsed["failed_logins"])
+    success_count = len(parsed["successful_logins"])
+    source_ip_count = len(parsed["source_ips"])
+    user_count = len(parsed["users"])
+    success_after_failure = bool(parsed["success_after_failure_ips"])
+    only_publickey_success = (
+        failed_count == 0
+        and success_count > 0
+        and all(
+            login.get("auth_method") == "publickey"
+            for login in parsed["successful_logins"]
+        )
+    )
+
+    confidence_score = 20
+    scoring_notes: list[str] = ["Base confidence: 20 (SSH auth log review)."]
+
+    if failed_count >= 10:
+        confidence_score += 30
+        scoring_notes.append(
+            f"+30: {failed_count} failed login(s) observed (possible brute force)."
+        )
+
+    if success_after_failure:
+        confidence_score += 25
+        scoring_notes.append(
+            "+25: successful login after prior failure from the same source IP "
+            f"({', '.join(parsed['success_after_failure_ips'])})."
+        )
+
+    if source_ip_count > 1:
+        confidence_score += 15
+        scoring_notes.append(
+            f"+15: {source_ip_count} unique source IP(s) (distributed activity)."
+        )
+
+    if only_publickey_success:
+        confidence_score -= 10
+        scoring_notes.append(
+            "-10: zero failed logins and only publickey successful logins "
+            "(often expected admin access)."
+        )
+
+    confidence_score = max(0, min(100, confidence_score))
+
+    if confidence_score <= 39:
+        risk_level = "low"
+    elif confidence_score <= 69:
+        risk_level = "medium"
+    else:
+        risk_level = "high"
+
+    findings: list[str] = [
+        f"Parsed {parsed['event_count']} SSH auth event(s) from {file_path}.",
+        f"Failed logins: {failed_count}.",
+        f"Successful logins: {success_count}.",
+        f"Unique source IPs: {source_ip_count} ({', '.join(parsed['source_ips']) or 'none'}).",
+        f"Unique users: {user_count} ({', '.join(parsed['users']) or 'none'}).",
+    ]
+
+    if failed_count == 0:
+        findings.append("No failed login pattern observed.")
+    elif failed_count < 10:
+        findings.append(
+            f"Failed login volume is below the brute-force threshold ({failed_count} < 10)."
+        )
+    else:
+        findings.append(
+            f"Failed login volume meets or exceeds the brute-force threshold ({failed_count} >= 10)."
+        )
+
+    if only_publickey_success:
+        findings.append("Successful publickey logins only; no password failures in sample.")
+
+    if success_after_failure:
+        findings.append(
+            "Success-after-failure activity detected from at least one source IP."
+        )
+    else:
+        findings.append("No success-after-failure sequence detected in log order.")
+
+    if risk_level == "low":
+        recommended_actions = [
+            "Continue routine monitoring and log the sample for baseline context.",
+            f"Verify source IP(s) {', '.join(parsed['source_ips']) or 'N/A'} are expected for this host.",
+            "Confirm publickey-based access aligns with your SSH hardening policy.",
+            "Re-run analysis if new auth telemetry is collected or failure volume increases.",
+        ]
+    elif risk_level == "medium":
+        recommended_actions = [
+            "Search for additional failed logins from the same source IP(s) in a wider time window.",
+            "Correlate successful logins with asset inventory and expected admin jump hosts.",
+            "Review whether password authentication should be disabled if only keys are intended.",
+            "Document findings and reassess if success-after-failure or failure volume grows.",
+        ]
+    else:
+        recommended_actions = [
+            "Escalate for senior analyst review; treat as potential unauthorized access.",
+            "Preserve auth logs and review active sessions on the affected host.",
+            "Investigate source IP(s) involved in success-after-failure sequences immediately.",
+            "Consider blocking or restricting source IP(s) if unauthorized access is confirmed.",
+        ]
+
+    analyst_notes = (
+        f"{' '.join(scoring_notes)} "
+        f"Risk level: {risk_level} (confidence {confidence_score}/100). "
+    )
+    if only_publickey_success and failed_count == 0:
+        analyst_notes += (
+            "This sample looks like routine key-based access with no failure noise; "
+            "still validate the source IP against your expected admin inventory."
+        )
+    elif success_after_failure:
+        analyst_notes += (
+            "Success after failure from the same IP is a high-value signal; "
+            "correlate with firewall, EDR, and command history if available."
+        )
+    else:
+        analyst_notes += (
+            "Expand context with surrounding log lines and host criticality before closing."
+        )
+
+    parsed_activity = {
+        "failed_login_count": failed_count,
+        "successful_login_count": success_count,
+        "unique_source_ip_count": source_ip_count,
+        "unique_user_count": user_count,
+        "success_after_failure": success_after_failure,
+        "success_after_failure_ips": parsed["success_after_failure_ips"],
+        "only_publickey_success": only_publickey_success,
+        "source_ips": parsed["source_ips"],
+        "users": parsed["users"],
+        "failed_logins": parsed["failed_logins"],
+        "successful_logins": parsed["successful_logins"],
+    }
+
+    result = {
+        "status": "ok",
+        "risk_level": risk_level,
+        "confidence_score": confidence_score,
+        "findings": findings,
+        "recommended_actions": recommended_actions,
+        "analyst_notes": analyst_notes,
+        "parsed_activity": parsed_activity,
+    }
+
+    return json.dumps(result, indent=2)
+
+
 COMMAND_EXECUTION_INDICATORS = [
     "curl",
     "wget",
