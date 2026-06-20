@@ -1,3 +1,4 @@
+from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 import json
 import re
@@ -417,7 +418,14 @@ MITRE_TECHNIQUE_NAMES = {
 
 DEFAULT_MITRE_BY_ALERT_TYPE = {
     "ssh_auth_failure": ["T1110", "T1078"],
+    "linux_auth_activity": ["T1078"],
     "suspicious_command_execution": ["T1105", "T1059", "T1027"],
+}
+
+ATTACK_CHAIN_STAGE_BY_EVENT_TYPE = {
+    "ssh_auth_failure": "Initial Access",
+    "linux_auth_activity": "Valid Accounts",
+    "suspicious_command_execution": "Command Execution",
 }
 
 
@@ -1892,6 +1900,474 @@ def investigate_command_execution(
         "analyst_notes": analyst_notes,
         "detection_recommendations": detection_recommendations,
         "investigation_runbook": runbook,
+    }
+
+    return json.dumps(result, indent=2)
+
+
+def _normalize_correlation_event(event: dict) -> dict:
+    confidence_raw = event.get("confidence_score", 0)
+    try:
+        confidence_score = int(confidence_raw)
+    except (TypeError, ValueError):
+        confidence_score = 0
+
+    event_type = str(event.get("event_type", "unknown")).strip().lower()
+    severity = str(event.get("severity", "unknown")).strip().lower()
+
+    return {
+        "event_type": event_type,
+        "timestamp": str(event.get("timestamp", "")).strip(),
+        "source_ip": str(event.get("source_ip", "")).strip(),
+        "host": str(event.get("host", "")).strip(),
+        "username": str(event.get("username", "")).strip(),
+        "severity": severity,
+        "confidence_score": confidence_score,
+        "description": str(event.get("description", "")).strip(),
+    }
+
+
+def _parse_event_timestamp(timestamp: str) -> datetime | None:
+    if not timestamp:
+        return None
+    normalized = timestamp.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _event_sort_key(event: dict) -> tuple[int, float]:
+    parsed = _parse_event_timestamp(event.get("timestamp", ""))
+    if parsed is None:
+        return (1, 0.0)
+    return (0, parsed.timestamp())
+
+
+def _events_share_source_ip(events: list[dict]) -> bool:
+    ip_counts: dict[str, int] = {}
+    for event in events:
+        source_ip = event.get("source_ip", "")
+        if not source_ip:
+            continue
+        ip_counts[source_ip] = ip_counts.get(source_ip, 0) + 1
+    return any(count >= 2 for count in ip_counts.values())
+
+
+def _events_share_host(events: list[dict]) -> bool:
+    host_counts: dict[str, int] = {}
+    for event in events:
+        host = event.get("host", "")
+        if not host:
+            continue
+        host_counts[host] = host_counts.get(host, 0) + 1
+    return any(count >= 2 for count in host_counts.values())
+
+
+def _events_are_linked(first: dict, second: dict) -> bool:
+    first_ip = first.get("source_ip", "")
+    second_ip = second.get("source_ip", "")
+    if first_ip and first_ip == second_ip:
+        return True
+    first_host = first.get("host", "")
+    second_host = second.get("host", "")
+    return bool(first_host and first_host == second_host)
+
+
+def _detect_event_sequence(
+    events: list[dict],
+    first_type: str,
+    second_type: str,
+) -> bool:
+    sorted_events = sorted(events, key=_event_sort_key)
+
+    for earlier in sorted_events:
+        if earlier.get("event_type") != first_type:
+            continue
+        for later in sorted_events:
+            if later is earlier:
+                continue
+            if later.get("event_type") != second_type:
+                continue
+            earlier_ts = _parse_event_timestamp(earlier.get("timestamp", ""))
+            later_ts = _parse_event_timestamp(later.get("timestamp", ""))
+            if earlier_ts and later_ts and earlier_ts >= later_ts:
+                continue
+            if _events_are_linked(earlier, later):
+                return True
+    return False
+
+
+def _count_medium_confidence_events(events: list[dict]) -> int:
+    return sum(1 for event in events if event.get("confidence_score", 0) >= 40)
+
+
+def _build_attack_timeline(events: list[dict]) -> list[dict]:
+    sorted_events = sorted(events, key=_event_sort_key)
+    timeline: list[dict] = []
+    for index, event in enumerate(sorted_events, start=1):
+        timeline.append(
+            {
+                "step": index,
+                "event_type": event.get("event_type", "unknown"),
+                "timestamp": event.get("timestamp", ""),
+                "source_ip": event.get("source_ip", ""),
+                "host": event.get("host", ""),
+                "username": event.get("username", ""),
+                "description": event.get("description", ""),
+            }
+        )
+    return timeline
+
+
+def _build_possible_attack_chain(event_types_in_order: list[str]) -> list[str]:
+    chain: list[str] = []
+    seen: set[str] = set()
+    for event_type in event_types_in_order:
+        stage = ATTACK_CHAIN_STAGE_BY_EVENT_TYPE.get(event_type)
+        if stage and stage not in seen:
+            seen.add(stage)
+            chain.append(stage)
+    return chain
+
+
+def _build_correlation_mitre_mapping(
+    event_types_in_order: list[str],
+    chain_detected: bool,
+) -> list[dict]:
+    if chain_detected:
+        ordered_techniques = ["T1110", "T1078", "T1059"]
+        return [
+            {
+                "technique_id": technique_id,
+                "name": _mitre_technique_name(technique_id),
+            }
+            for technique_id in ordered_techniques
+        ]
+
+    seen: set[str] = set()
+    mapping: list[dict] = []
+    for event_type in event_types_in_order:
+        for entry in _build_mitre_mapping(event_type):
+            technique_id = entry["technique_id"]
+            if technique_id in seen:
+                continue
+            seen.add(technique_id)
+            mapping.append(entry)
+    return mapping
+
+
+def _risk_level_from_confidence(confidence_score: int) -> str:
+    if confidence_score <= 39:
+        return "low"
+    if confidence_score <= 69:
+        return "medium"
+    return "high"
+
+
+def _bump_risk_level(risk_level: str) -> str:
+    if risk_level == "low":
+        return "medium"
+    if risk_level == "medium":
+        return "high"
+    return "high"
+
+
+def _score_correlation(
+    events: list[dict],
+    same_source_ip: bool,
+    same_host: bool,
+    ssh_before_auth: bool,
+    auth_before_command: bool,
+    ssh_before_command: bool,
+    medium_confidence_count: int,
+) -> tuple[int, list[str]]:
+    confidence_score = 30
+    findings: list[str] = []
+
+    if same_source_ip:
+        confidence_score += 20
+        findings.append(
+            "Rule 1: The same source IP appears across multiple correlated events."
+        )
+    if same_host:
+        confidence_score += 15
+        findings.append(
+            "Rule 2: The same host appears across multiple correlated events."
+        )
+    if ssh_before_auth:
+        confidence_score += 20
+        findings.append(
+            "Rule 3: SSH authentication failures were followed by Linux auth activity."
+        )
+    if auth_before_command:
+        confidence_score += 25
+        findings.append(
+            "Rule 4: Linux auth activity was followed by suspicious command execution."
+        )
+    if ssh_before_command:
+        confidence_score += 15
+        findings.append(
+            "Rule 5: SSH authentication failures were followed by suspicious command execution."
+        )
+    if medium_confidence_count >= 2:
+        confidence_score += 10
+        findings.append(
+            "Rule 6: Multiple medium-confidence events increase overall correlation confidence."
+        )
+
+    confidence_score = max(0, min(100, confidence_score))
+    return confidence_score, findings
+
+
+def _correlation_escalation_and_steps(
+    risk_level: str,
+) -> tuple[str, list[str]]:
+    if risk_level == "high":
+        return (
+            "Escalate promptly and review containment options for the correlated activity.",
+            [
+                "Escalate",
+                "Review containment options",
+                "Generate SOC documentation",
+            ],
+        )
+    if risk_level == "medium":
+        return (
+            "Expand the investigation and hunt for related activity before closing the case.",
+            [
+                "Expand investigation",
+                "Hunt for related activity",
+            ],
+        )
+    return (
+        "Continue monitoring and gather additional telemetry before escalation.",
+        [
+            "Continue monitoring",
+            "Gather additional telemetry",
+        ],
+    )
+
+
+def _collect_related_events(
+    events: list[dict],
+    sequence_detected: bool,
+) -> list[dict]:
+    if not events:
+        return []
+
+    related_flags = [False] * len(events)
+    for index, event in enumerate(events):
+        for other_index, other in enumerate(events):
+            if index == other_index:
+                continue
+            if _events_are_linked(event, other):
+                related_flags[index] = True
+                related_flags[other_index] = True
+
+    if sequence_detected:
+        related_flags = [True] * len(events)
+
+    return [event for index, event in enumerate(events) if related_flags[index]]
+
+
+def _build_correlation_detection_gaps(
+    events: list[dict],
+    ssh_before_auth: bool,
+    auth_before_command: bool,
+    ssh_before_command: bool,
+) -> list[str]:
+    event_types = {event.get("event_type") for event in events}
+    gaps: list[str] = []
+
+    if "ssh_auth_failure" in event_types and "suspicious_command_execution" not in event_types:
+        gaps.append(
+            "Missing command-line or EDR telemetry to confirm post-access execution."
+        )
+    if (
+        "ssh_auth_failure" in event_types
+        and "linux_auth_activity" not in event_types
+        and "suspicious_command_execution" in event_types
+        and not ssh_before_command
+    ):
+        gaps.append(
+            "Missing Linux auth telemetry between SSH failures and command execution."
+        )
+    if "linux_auth_activity" in event_types and "suspicious_command_execution" not in event_types:
+        gaps.append(
+            "Missing suspicious command execution telemetry after observed auth activity."
+        )
+    if ssh_before_auth and not auth_before_command:
+        gaps.append(
+            "Auth activity was observed after SSH failures, but no follow-on command execution telemetry was correlated."
+        )
+    if not gaps:
+        gaps.append(
+            "No obvious telemetry gaps were identified for the correlated event set."
+        )
+    return gaps
+
+
+@mcp.tool()
+def correlate_security_events(events: list[dict]) -> str:
+    """
+    Correlate multiple security investigation findings into a possible attack chain.
+    Uses simple deterministic rules only (no machine learning, API calls, SSH,
+    external lookups, or threat intelligence feeds). Accepts normalized event dicts
+    typically produced by earlier investigation tools.
+    """
+    if not isinstance(events, list):
+        return json.dumps(
+            {
+                "status": "error",
+                "analyst_note": "events must be a list of event dictionaries.",
+            },
+            indent=2,
+        )
+
+    if not events:
+        escalation, next_steps = _correlation_escalation_and_steps("low")
+        return json.dumps(
+            {
+                "status": "ok",
+                "correlation_summary": "No events were provided for correlation.",
+                "correlated_events": [],
+                "attack_timeline": [],
+                "possible_attack_chain": [],
+                "mitre_mapping": [],
+                "risk_level": "low",
+                "confidence_score": 30,
+                "escalation_recommendation": escalation,
+                "detection_gaps": [
+                    "Provide related SSH, auth, or command execution events to evaluate an attack chain."
+                ],
+                "recommended_next_steps": next_steps,
+                "analyst_note": (
+                    "This tool correlates multiple investigation findings using simple "
+                    "deterministic rules. No events were supplied, so only baseline "
+                    "guidance is returned."
+                ),
+            },
+            indent=2,
+        )
+
+    normalized_events = [
+        _normalize_correlation_event(event if isinstance(event, dict) else {})
+        for event in events
+    ]
+
+    same_source_ip = _events_share_source_ip(normalized_events)
+    same_host = _events_share_host(normalized_events)
+    ssh_before_auth = _detect_event_sequence(
+        normalized_events,
+        "ssh_auth_failure",
+        "linux_auth_activity",
+    )
+    auth_before_command = _detect_event_sequence(
+        normalized_events,
+        "linux_auth_activity",
+        "suspicious_command_execution",
+    )
+    ssh_before_command = _detect_event_sequence(
+        normalized_events,
+        "ssh_auth_failure",
+        "suspicious_command_execution",
+    )
+    medium_confidence_count = _count_medium_confidence_events(normalized_events)
+
+    sequence_detected = ssh_before_auth or auth_before_command or ssh_before_command
+    correlated_events = _collect_related_events(normalized_events, sequence_detected)
+    if not correlated_events and (same_source_ip or same_host):
+        correlated_events = normalized_events
+
+    confidence_score, findings = _score_correlation(
+        normalized_events,
+        same_source_ip=same_source_ip,
+        same_host=same_host,
+        ssh_before_auth=ssh_before_auth,
+        auth_before_command=auth_before_command,
+        ssh_before_command=ssh_before_command,
+        medium_confidence_count=medium_confidence_count,
+    )
+
+    risk_level = _risk_level_from_confidence(confidence_score)
+    if len(correlated_events) >= 3:
+        findings.append(
+            "Rule 7: Three or more related events increase the overall risk level."
+        )
+        risk_level = _bump_risk_level(risk_level)
+
+    timeline_source = correlated_events or normalized_events
+    attack_timeline = _build_attack_timeline(timeline_source)
+    event_types_in_order = [entry["event_type"] for entry in attack_timeline]
+    if sequence_detected:
+        possible_attack_chain = _build_possible_attack_chain(event_types_in_order)
+    else:
+        possible_attack_chain = []
+    event_type_set = set(event_types_in_order)
+    full_chain_detected = (
+        "ssh_auth_failure" in event_type_set
+        and "linux_auth_activity" in event_type_set
+        and "suspicious_command_execution" in event_type_set
+    )
+    mitre_mapping = _build_correlation_mitre_mapping(
+        event_types_in_order,
+        chain_detected=full_chain_detected,
+    )
+
+    escalation_recommendation, recommended_next_steps = _correlation_escalation_and_steps(
+        risk_level
+    )
+    detection_gaps = _build_correlation_detection_gaps(
+        timeline_source,
+        ssh_before_auth=ssh_before_auth,
+        auth_before_command=auth_before_command,
+        ssh_before_command=ssh_before_command,
+    )
+
+    if findings:
+        correlation_summary = " ".join(findings)
+    elif correlated_events:
+        correlation_summary = (
+            "Events share common observables but no stronger attack-chain sequence was detected."
+        )
+    else:
+        correlation_summary = (
+            "The supplied events appear unrelated based on shared IP, host, and sequence checks."
+        )
+
+    if possible_attack_chain:
+        analyst_note = (
+            "This tool applied beginner-friendly correlation rules to identify a possible "
+            "attack chain across multiple investigation findings. Review the timeline, "
+            "MITRE mapping, and recommended actions before escalation. No external lookups "
+            "or automated response actions are performed."
+        )
+    elif correlated_events:
+        analyst_note = (
+            "Related observables were identified, but the event sequence does not yet "
+            "form a complete attack chain. Continue gathering telemetry and re-run "
+            "correlation as new findings arrive."
+        )
+    else:
+        analyst_note = (
+            "The supplied events do not appear strongly related. Continue monitoring and "
+            "collect additional telemetry before treating this as a coordinated attack chain."
+        )
+
+    result = {
+        "status": "ok",
+        "correlation_summary": correlation_summary,
+        "correlated_events": correlated_events,
+        "attack_timeline": attack_timeline,
+        "possible_attack_chain": possible_attack_chain,
+        "mitre_mapping": mitre_mapping,
+        "risk_level": risk_level,
+        "confidence_score": confidence_score,
+        "escalation_recommendation": escalation_recommendation,
+        "detection_gaps": detection_gaps,
+        "recommended_next_steps": recommended_next_steps,
+        "analyst_note": analyst_note,
     }
 
     return json.dumps(result, indent=2)

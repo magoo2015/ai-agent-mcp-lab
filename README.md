@@ -22,12 +22,16 @@ This project demonstrates:
 - Analyst Decision Support
 - AI-Assisted SOC Investigations
 - AI-Assisted Investigation Runbook Generation
+- Multi-Alert Correlation
+- AI-Assisted Attack Chain Analysis
 
 Key capabilities include:
 
 - Alert Classification and Routing
 - SSH Authentication Failure Investigations
 - Suspicious Command Execution Investigations
+- Multi-Alert Correlation
+- AI-Assisted Attack Chain Analysis
 - Severity and Confidence Scoring
 - Investigation Summary Generation
 - AI-Assisted Investigation Runbook Generation
@@ -284,6 +288,94 @@ Outputs:
 - Recommended Actions
 - Analyst Notes
 - Investigation Runbook
+
+---
+
+## Event Correlation
+
+### correlate_security_events
+
+Purpose:
+
+Correlate multiple investigation findings and identify potential attack chains across SSH failures, Linux auth activity, and suspicious command execution events.
+
+Inputs:
+
+- `events` (list of dicts) — each event may include:
+  - `event_type`
+  - `timestamp`
+  - `source_ip`
+  - `host`
+  - `username`
+  - `severity`
+  - `confidence_score`
+  - `description`
+
+Example event:
+
+```json
+{
+  "event_type": "ssh_auth_failure",
+  "timestamp": "2026-06-20T01:00:00Z",
+  "source_ip": "192.168.1.50",
+  "host": "ubuntu-agent",
+  "username": "root",
+  "severity": "high",
+  "confidence_score": 80,
+  "description": "Repeated SSH authentication failures"
+}
+```
+
+Outputs:
+
+- Attack Timeline
+- Possible Attack Chain
+- MITRE Mapping
+- Correlation Summary
+- Risk Assessment (`risk_level`, `confidence_score`)
+- Recommended Actions (`recommended_next_steps`, `escalation_recommendation`)
+- Detection Gaps
+- Analyst Note
+
+Correlation rules include shared source IP, shared host, SSH failure → auth activity → command execution sequences, and multi-event confidence/risk scoring. Uses simple deterministic logic only (no machine learning, API calls, or external lookups).
+
+Example output fields:
+
+```json
+{
+  "status": "ok",
+  "correlation_summary": "Rule 1: The same source IP appears across multiple correlated events. ...",
+  "possible_attack_chain": [
+    "Initial Access",
+    "Valid Accounts",
+    "Command Execution"
+  ],
+  "mitre_mapping": [
+    {"technique_id": "T1110", "name": "Brute Force"},
+    {"technique_id": "T1078", "name": "Valid Accounts"},
+    {"technique_id": "T1059", "name": "Command and Scripting Interpreter"}
+  ],
+  "risk_level": "high",
+  "confidence_score": 100,
+  "escalation_recommendation": "Escalate promptly and review containment options for the correlated activity."
+}
+```
+
+Example Workflow:
+
+```text
+SSH Authentication Failure
+↓
+Linux Auth Activity
+↓
+Suspicious Command Execution
+↓
+correlate_security_events
+↓
+Attack Chain Analysis
+↓
+Escalation Recommendation
+```
 
 ---
 
@@ -735,6 +827,8 @@ Completed:
 
 ✅ AI-Assisted Investigation Runbook Generation
 
+✅ Multi-Alert Correlation
+
 ✅ Real system inventory and uptime collection from aihost
 
 ---
@@ -743,7 +837,6 @@ Completed:
 
 Suggested future phases (SOC and detection engineering focus):
 
-- Multi-alert correlation across related SSH, command, and auth telemetry
 - Threat intelligence enrichment for source IPs and observables
 - Splunk SPL query generation for hunt and detection workflows
 - Security Copilot-style investigation chains that orchestrate multiple MCP tools
@@ -765,7 +858,6 @@ Real telemetry samples (for example `sample_data/aihost_*.log`) are listed in `.
 - Threat Intelligence Enrichment
 - IOC Reputation Lookups
 - Splunk SPL Query Generation
-- Multi-Alert Correlation
 - Security Copilot-Style Investigation Chains
 - Integration with Future AI Security Labs
 

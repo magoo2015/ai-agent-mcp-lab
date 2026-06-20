@@ -15,6 +15,7 @@ from pathlib import Path
 # Import tools from soc_mcp_server.py in the same directory
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from soc_mcp_server import (  # noqa: E402
+    correlate_security_events,
     generate_detection_package,
     generate_investigation_runbook,
     generate_qradar_aql_detection,
@@ -40,6 +41,54 @@ RUNBOOK_REQUIRED_KEYS = [
     "ticket_documentation_guidance",
     "analyst_note",
 ]
+
+CORRELATION_REQUIRED_KEYS = [
+    "status",
+    "correlation_summary",
+    "correlated_events",
+    "attack_timeline",
+    "possible_attack_chain",
+    "mitre_mapping",
+    "risk_level",
+    "confidence_score",
+    "escalation_recommendation",
+    "detection_gaps",
+    "recommended_next_steps",
+    "analyst_note",
+]
+
+SSH_EVENT = {
+    "event_type": "ssh_auth_failure",
+    "timestamp": "2026-06-20T01:00:00Z",
+    "source_ip": "192.168.1.50",
+    "host": "ubuntu-agent",
+    "username": "root",
+    "severity": "high",
+    "confidence_score": 80,
+    "description": "Repeated SSH authentication failures",
+}
+
+AUTH_EVENT = {
+    "event_type": "linux_auth_activity",
+    "timestamp": "2026-06-20T01:05:00Z",
+    "source_ip": "192.168.1.50",
+    "host": "ubuntu-agent",
+    "username": "root",
+    "severity": "medium",
+    "confidence_score": 60,
+    "description": "Successful SSH login after repeated failures",
+}
+
+CMD_EVENT = {
+    "event_type": "suspicious_command_execution",
+    "timestamp": "2026-06-20T01:10:00Z",
+    "source_ip": "192.168.1.50",
+    "host": "ubuntu-agent",
+    "username": "root",
+    "severity": "high",
+    "confidence_score": 85,
+    "description": "Suspicious curl pipe to bash command execution",
+}
 
 
 def test_parse_wazuh_alert_returns_status_ok() -> None:
@@ -178,6 +227,117 @@ def test_investigate_command_execution_includes_detection_recommendations() -> N
     assert len(result["detection_recommendations"]["recommended_detections"]) > 0
 
 
+def _assert_correlation_shape(result: dict) -> None:
+    for key in CORRELATION_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+
+def test_correlate_security_events_same_source_ip() -> None:
+    """correlate_security_events should correlate events with the same source IP."""
+    events = [
+        SSH_EVENT,
+        {
+            **CMD_EVENT,
+            "timestamp": "2026-06-20T02:00:00Z",
+            "host": "other-host",
+        },
+    ]
+    result = json.loads(correlate_security_events(events))
+    _assert_correlation_shape(result)
+
+    assert result["status"] == "ok"
+    assert result["confidence_score"] >= 50
+    assert "Rule 1" in result["correlation_summary"]
+    assert len(result["correlated_events"]) >= 2
+
+
+def test_correlate_security_events_same_host() -> None:
+    """correlate_security_events should correlate events on the same host."""
+    events = [
+        {**SSH_EVENT, "source_ip": "10.0.0.10"},
+        {**AUTH_EVENT, "source_ip": "10.0.0.11"},
+    ]
+    result = json.loads(correlate_security_events(events))
+    _assert_correlation_shape(result)
+
+    assert result["status"] == "ok"
+    assert result["confidence_score"] >= 45
+    assert "Rule 2" in result["correlation_summary"]
+    assert len(result["correlated_events"]) == 2
+
+
+def test_correlate_security_events_full_attack_chain() -> None:
+    """correlate_security_events should detect SSH -> auth -> command chain."""
+    result = json.loads(
+        correlate_security_events([SSH_EVENT, AUTH_EVENT, CMD_EVENT])
+    )
+    _assert_correlation_shape(result)
+
+    assert result["status"] == "ok"
+    assert result["possible_attack_chain"] == [
+        "Initial Access",
+        "Valid Accounts",
+        "Command Execution",
+    ]
+    technique_ids = [entry["technique_id"] for entry in result["mitre_mapping"]]
+    assert technique_ids == ["T1110", "T1078", "T1059"]
+    assert result["risk_level"] == "high"
+    assert len(result["attack_timeline"]) == 3
+
+
+def test_correlate_security_events_empty_list() -> None:
+    """correlate_security_events should handle an empty event list gracefully."""
+    result = json.loads(correlate_security_events([]))
+    _assert_correlation_shape(result)
+
+    assert result["status"] == "ok"
+    assert result["correlated_events"] == []
+    assert result["risk_level"] == "low"
+    assert result["confidence_score"] == 30
+
+
+def test_correlate_security_events_unrelated_events() -> None:
+    """correlate_security_events should treat unrelated events as low risk."""
+    events = [
+        {
+            "event_type": "ssh_auth_failure",
+            "timestamp": "2026-06-20T01:00:00Z",
+            "source_ip": "10.1.1.1",
+            "host": "host-a",
+            "confidence_score": 35,
+            "description": "SSH failures on host-a",
+        },
+        {
+            "event_type": "suspicious_command_execution",
+            "timestamp": "2026-06-20T04:00:00Z",
+            "source_ip": "10.2.2.2",
+            "host": "host-b",
+            "confidence_score": 30,
+            "description": "Command execution on host-b",
+        },
+    ]
+    result = json.loads(correlate_security_events(events))
+    _assert_correlation_shape(result)
+
+    assert result["status"] == "ok"
+    assert result["risk_level"] == "low"
+    assert result["possible_attack_chain"] == []
+    assert result["correlated_events"] == []
+
+
+def test_correlate_security_events_high_risk_scenario() -> None:
+    """correlate_security_events should escalate a multi-event attack chain."""
+    events = [SSH_EVENT, AUTH_EVENT, CMD_EVENT]
+    result = json.loads(correlate_security_events(events))
+    _assert_correlation_shape(result)
+
+    assert result["status"] == "ok"
+    assert result["risk_level"] == "high"
+    escalation = result["escalation_recommendation"].lower()
+    assert "escalate" in escalation or "containment" in escalation
+    assert "Rule 7" in result["correlation_summary"]
+
+
 def test_generate_qradar_aql_detection_ssh() -> None:
     """generate_qradar_aql_detection should return SSH brute-force AQL."""
     result_raw = generate_qradar_aql_detection(
@@ -267,6 +427,24 @@ def main() -> None:
 
     test_investigate_command_execution_includes_detection_recommendations()
     print("PASS: investigate_command_execution includes detection_recommendations")
+
+    test_correlate_security_events_same_source_ip()
+    print("PASS: correlate_security_events same source IP")
+
+    test_correlate_security_events_same_host()
+    print("PASS: correlate_security_events same host")
+
+    test_correlate_security_events_full_attack_chain()
+    print("PASS: correlate_security_events full attack chain")
+
+    test_correlate_security_events_empty_list()
+    print("PASS: correlate_security_events empty list")
+
+    test_correlate_security_events_unrelated_events()
+    print("PASS: correlate_security_events unrelated events")
+
+    test_correlate_security_events_high_risk_scenario()
+    print("PASS: correlate_security_events high risk scenario")
 
     test_generate_qradar_aql_detection_ssh()
     print("PASS: generate_qradar_aql_detection ssh_auth_failure")
