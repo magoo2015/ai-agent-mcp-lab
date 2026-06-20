@@ -2883,6 +2883,439 @@ def generate_detection_package(
     return json.dumps(result, indent=2)
 
 
+def _build_command_incident_ticket_note(investigation: dict) -> dict:
+    """Structured analyst documentation for command execution incidents."""
+    return {
+        "summary": investigation.get("command_summary", ""),
+        "severity": investigation.get("severity", "unknown"),
+        "confidence_score": investigation.get("confidence_score", 0),
+        "priority": investigation.get("priority", "unknown"),
+        "suspicious_indicators": investigation.get("suspicious_indicators", []),
+        "mitre_mapping": investigation.get("mitre_mapping", []),
+        "recommended_actions": investigation.get("recommended_actions", []),
+        "documentation_guidance": (
+            "Paste this summary into ServiceNow, Jira, or IBM SOAR. "
+            "Add timestamps, ticket IDs, and the full command line from the "
+            "original alert before submission."
+        ),
+    }
+
+
+def _correlation_event_types(correlation: dict) -> set[str]:
+    """Collect event types present in a correlation result."""
+    event_types: set[str] = set()
+    for event in correlation.get("correlated_events", []):
+        event_type = event.get("event_type", "")
+        if event_type:
+            event_types.add(event_type)
+    for entry in correlation.get("attack_timeline", []):
+        event_type = entry.get("event_type", "")
+        if event_type:
+            event_types.add(event_type)
+    return event_types
+
+
+def _runbook_types_for_correlation(correlation: dict) -> list[str]:
+    """Return runbook alert types relevant to correlated events."""
+    event_types = _correlation_event_types(correlation)
+    runbook_types: list[str] = []
+    for alert_type in (
+        "ssh_auth_failure",
+        "linux_auth_activity",
+        "suspicious_command_execution",
+    ):
+        if alert_type in event_types:
+            runbook_types.append(alert_type)
+    return runbook_types
+
+
+def _investigate_wazuh_alert_incident(
+    file_path: str,
+    failures_last_10_minutes: int,
+    success_after_failure: bool,
+    source_is_known_admin_host: bool,
+) -> str:
+    workflow_used = ["identify_alert_type"]
+    if not file_path or not file_path.strip():
+        return json.dumps(
+            {
+                "status": "error",
+                "analyst_note": "file_path is required for input_type wazuh_alert.",
+            },
+            indent=2,
+        )
+
+    classification_raw = identify_alert_type(file_path)
+    if classification_raw.startswith("Error:"):
+        return json.dumps(
+            {
+                "status": "error",
+                "input_type": "wazuh_alert",
+                "workflow_used": workflow_used,
+                "analyst_note": classification_raw,
+            },
+            indent=2,
+        )
+
+    classification = json.loads(classification_raw)
+    alert_type = classification.get("alert_type", "unknown")
+
+    if alert_type == "ssh_auth_failure":
+        workflow_used.extend(
+            [
+                "investigate_ssh_alert",
+                "generate_detection_package",
+                "generate_soc_ticket_note",
+            ]
+        )
+        investigation_raw = investigate_ssh_alert(
+            file_path=file_path,
+            failures_last_10_minutes=failures_last_10_minutes,
+            success_after_failure=success_after_failure,
+            source_is_known_admin_host=source_is_known_admin_host,
+        )
+        if investigation_raw.startswith("Error:"):
+            return json.dumps(
+                {
+                    "status": "error",
+                    "input_type": "wazuh_alert",
+                    "workflow_used": workflow_used,
+                    "alert_classification": classification,
+                    "analyst_note": investigation_raw,
+                },
+                indent=2,
+            )
+
+        investigation = json.loads(investigation_raw)
+        obs = investigation["alert_summary"]["observables"]
+        scored = investigation["risk_score"]
+        next_action = investigation["next_action"]
+
+        detection_package = json.loads(
+            generate_detection_package(
+                alert_type="ssh_auth_failure",
+                severity=scored["severity"],
+                confidence_score=scored["confidence_score"],
+            )
+        )
+
+        ticket_raw = generate_soc_ticket_note(
+            source_ip=obs["source_ip"],
+            target_user=obs["target_user"],
+            host=obs["host"],
+            severity=scored["severity"],
+            confidence_score=scored["confidence_score"],
+            priority=scored["priority"],
+            rule_id=str(obs["rule_id"]),
+            rule_description=obs["rule_description"],
+            recommended_action=next_action["recommended_action"],
+        )
+        ticket = json.loads(ticket_raw)
+
+        incident_summary = investigation["investigation_summary"].get(
+            "executive_summary",
+            investigation["alert_summary"].get("summary", ""),
+        )
+        recommended_next_steps = investigation["investigation_summary"].get(
+            "recommended_actions", []
+        )
+
+        result = {
+            "status": "ok",
+            "input_type": "wazuh_alert",
+            "workflow_used": workflow_used,
+            "incident_summary": incident_summary,
+            "alert_classification": classification,
+            "investigation_results": investigation,
+            "correlation_results": None,
+            "runbook": investigation.get("investigation_runbook"),
+            "detection_package": detection_package,
+            "ticket_note": ticket.get("ticket_note"),
+            "recommended_next_steps": recommended_next_steps,
+            "analyst_note": (
+                "End-to-end SSH authentication failure investigation completed using "
+                "identify_alert_type, investigate_ssh_alert, generate_detection_package, "
+                "and generate_soc_ticket_note. Review ticket note and detection package "
+                "before escalation."
+            ),
+        }
+        return json.dumps(result, indent=2)
+
+    if alert_type == "suspicious_command_execution":
+        workflow_used.append("manual_routing_guidance")
+        result = {
+            "status": "ok",
+            "input_type": "wazuh_alert",
+            "workflow_used": workflow_used,
+            "incident_summary": (
+                "Wazuh alert classified as suspicious command execution. "
+                "File-based command execution routing is identified but not yet "
+                "chained in this workflow."
+            ),
+            "alert_classification": classification,
+            "investigation_results": None,
+            "correlation_results": None,
+            "runbook": None,
+            "detection_package": None,
+            "ticket_note": None,
+            "recommended_next_steps": [
+                "Re-run investigate_security_incident with input_type='command_execution'.",
+                "Provide the command string and host/user context from the alert file.",
+            ],
+            "analyst_note": (
+                "Alert type suspicious_command_execution was identified from the Wazuh file, "
+                "but the full command execution chain requires input_type='command_execution' "
+                "with the command details for now."
+            ),
+        }
+        return json.dumps(result, indent=2)
+
+    workflow_used.append("manual_review")
+    result = {
+        "status": "ok",
+        "input_type": "wazuh_alert",
+        "workflow_used": workflow_used,
+        "incident_summary": (
+            "Wazuh alert could not be automatically classified. Manual analyst review is required."
+        ),
+        "alert_classification": classification,
+        "investigation_results": None,
+        "correlation_results": None,
+        "runbook": json.loads(
+            generate_investigation_runbook(
+                alert_type="unknown",
+                severity="medium",
+                confidence_score=40,
+            )
+        ),
+        "detection_package": None,
+        "ticket_note": None,
+        "recommended_next_steps": [
+            "Review detected_fields from alert_classification.",
+            "Determine whether the alert is SSH, command execution, or another category.",
+            "Run the appropriate single-purpose investigation tool once classified.",
+        ],
+        "analyst_note": classification.get(
+            "reasoning",
+            "Unknown alert type — manual review incident package returned.",
+        ),
+    }
+    return json.dumps(result, indent=2)
+
+
+def _investigate_command_execution_incident(
+    command: str,
+    hostname: str,
+    username: str,
+    source_ip: str,
+) -> str:
+    workflow_used = [
+        "investigate_command_execution",
+        "generate_investigation_runbook",
+        "generate_detection_package",
+    ]
+
+    if not command or not command.strip():
+        return json.dumps(
+            {
+                "status": "error",
+                "analyst_note": "command is required for input_type command_execution.",
+            },
+            indent=2,
+        )
+
+    investigation_raw = investigate_command_execution(
+        command=command,
+        hostname=hostname,
+        username=username,
+        source_ip=source_ip,
+    )
+    investigation = json.loads(investigation_raw)
+    if investigation.get("status") == "error":
+        return json.dumps(
+            {
+                "status": "error",
+                "input_type": "command_execution",
+                "workflow_used": workflow_used,
+                "analyst_note": investigation.get(
+                    "analyst_notes",
+                    "command execution investigation failed.",
+                ),
+            },
+            indent=2,
+        )
+
+    severity = investigation["severity"]
+    confidence_score = investigation["confidence_score"]
+    mitre_techniques = [
+        entry["technique_id"] for entry in investigation.get("mitre_mapping", [])
+    ]
+
+    runbook = json.loads(
+        generate_investigation_runbook(
+            alert_type="suspicious_command_execution",
+            severity=severity,
+            confidence_score=confidence_score,
+        )
+    )
+
+    detection_package = json.loads(
+        generate_detection_package(
+            alert_type="suspicious_command_execution",
+            severity=severity,
+            confidence_score=confidence_score,
+            mitre_techniques=mitre_techniques,
+        )
+    )
+
+    ticket_note = _build_command_incident_ticket_note(investigation)
+
+    result = {
+        "status": "ok",
+        "input_type": "command_execution",
+        "workflow_used": workflow_used,
+        "incident_summary": investigation.get("command_summary", ""),
+        "alert_classification": {
+            "alert_type": "suspicious_command_execution",
+            "recommended_workflow": "investigate_command_execution",
+        },
+        "investigation_results": investigation,
+        "correlation_results": None,
+        "runbook": runbook,
+        "detection_package": detection_package,
+        "ticket_note": ticket_note,
+        "recommended_next_steps": investigation.get("recommended_actions", []),
+        "analyst_note": investigation.get("analyst_notes", ""),
+    }
+    return json.dumps(result, indent=2)
+
+
+def _investigate_event_collection_incident(events: list[dict] | None) -> str:
+    workflow_used = ["correlate_security_events"]
+
+    if not events:
+        return json.dumps(
+            {
+                "status": "error",
+                "analyst_note": "events is required and cannot be empty for input_type event_collection.",
+            },
+            indent=2,
+        )
+
+    correlation = json.loads(correlate_security_events(events))
+    if correlation.get("status") == "error":
+        return json.dumps(
+            {
+                "status": "error",
+                "input_type": "event_collection",
+                "workflow_used": workflow_used,
+                "analyst_note": correlation.get(
+                    "analyst_note",
+                    "event correlation failed.",
+                ),
+            },
+            indent=2,
+        )
+
+    runbook_types = _runbook_types_for_correlation(correlation)
+    if runbook_types:
+        workflow_used.append("generate_investigation_runbook")
+
+    risk_level = correlation.get("risk_level", "medium")
+    confidence_score = correlation.get("confidence_score", 60)
+    severity = risk_level if risk_level in ("low", "medium", "high") else "medium"
+
+    runbooks: dict | None = None
+    if runbook_types:
+        runbooks = {}
+        for alert_type in runbook_types:
+            runbooks[alert_type] = json.loads(
+                generate_investigation_runbook(
+                    alert_type=alert_type,
+                    severity=severity,
+                    confidence_score=confidence_score,
+                )
+            )
+
+    incident_summary = correlation.get("correlation_summary", "")
+    if correlation.get("possible_attack_chain"):
+        chain_text = " → ".join(correlation["possible_attack_chain"])
+        incident_summary = f"{incident_summary} Possible attack chain: {chain_text}."
+
+    result = {
+        "status": "ok",
+        "input_type": "event_collection",
+        "workflow_used": workflow_used,
+        "incident_summary": incident_summary,
+        "alert_classification": None,
+        "investigation_results": None,
+        "correlation_results": correlation,
+        "runbook": runbooks,
+        "detection_package": None,
+        "ticket_note": None,
+        "recommended_next_steps": correlation.get("recommended_next_steps", []),
+        "analyst_note": correlation.get("analyst_note", ""),
+    }
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def investigate_security_incident(
+    input_type: str,
+    file_path: str = "",
+    command: str = "",
+    hostname: str = "unknown",
+    username: str = "unknown",
+    source_ip: str = "unknown",
+    events: list[dict] | None = None,
+    failures_last_10_minutes: int = 1,
+    success_after_failure: bool = False,
+    source_is_known_admin_host: bool = False,
+) -> str:
+    """
+    Run an end-to-end Security Copilot-style investigation chain by orchestrating
+    existing MCP tools. Supports Wazuh alert files, suspicious command execution
+    inputs, or collections of normalized security events. No API calls, SSH, or
+    external lookups.
+
+    input_type values:
+    - wazuh_alert: identify alert type, investigate SSH alerts, build detection
+      package and ticket note
+    - command_execution: investigate command, generate runbook and detection package
+    - event_collection: correlate events and recommend runbooks for attack chains
+    """
+    supported_types = {"wazuh_alert", "command_execution", "event_collection"}
+    if input_type not in supported_types:
+        return json.dumps(
+            {
+                "status": "error",
+                "analyst_note": (
+                    "supported input types are wazuh_alert, command_execution, "
+                    "event_collection"
+                ),
+            },
+            indent=2,
+        )
+
+    if input_type == "wazuh_alert":
+        return _investigate_wazuh_alert_incident(
+            file_path=file_path,
+            failures_last_10_minutes=failures_last_10_minutes,
+            success_after_failure=success_after_failure,
+            source_is_known_admin_host=source_is_known_admin_host,
+        )
+
+    if input_type == "command_execution":
+        return _investigate_command_execution_incident(
+            command=command,
+            hostname=hostname,
+            username=username,
+            source_ip=source_ip,
+        )
+
+    return _investigate_event_collection_incident(events)
+
+
 # --- Remote host inventory (read-only SSH) ---
 
 _INVENTORY_SEP = "---SEP---"

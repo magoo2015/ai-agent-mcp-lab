@@ -24,6 +24,8 @@ This project demonstrates:
 - AI-Assisted Investigation Runbook Generation
 - Multi-Alert Correlation
 - AI-Assisted Attack Chain Analysis
+- Security Copilot-Style Investigation Chains
+- End-to-End Incident Investigation Orchestration
 
 Key capabilities include:
 
@@ -32,7 +34,8 @@ Key capabilities include:
 - Suspicious Command Execution Investigations
 - Multi-Alert Correlation
 - AI-Assisted Attack Chain Analysis
-- Severity and Confidence Scoring
+- Security Copilot-Style Investigation Chains
+- End-to-End Incident Investigation Orchestration
 - Investigation Summary Generation
 - AI-Assisted Investigation Runbook Generation
 - Security Ticket Generation
@@ -376,6 +379,77 @@ Attack Chain Analysis
 ↓
 Escalation Recommendation
 ```
+
+---
+
+## Security Copilot Orchestration
+
+### investigate_security_incident
+
+Purpose:
+
+Run an end-to-end investigation workflow using existing MCP tools. Chains alert classification, investigation, correlation, runbook generation, detection packaging, and ticket documentation into a single Security Copilot-style incident package.
+
+Supported input types:
+
+| Input Type         | Description                                              |
+| ------------------ | -------------------------------------------------------- |
+| wazuh_alert        | Wazuh alert JSON file path (SSH workflow chained today)  |
+| command_execution  | Suspicious command string with optional host/user/IP     |
+| event_collection   | List of normalized security events for correlation       |
+
+Example workflows:
+
+```text
+Wazuh Alert
+↓
+identify_alert_type
+↓
+investigate_ssh_alert
+↓
+generate_detection_package
+↓
+generate_soc_ticket_note
+↓
+Incident Package
+```
+
+```text
+Command Execution
+↓
+investigate_command_execution
+↓
+generate_investigation_runbook
+↓
+generate_detection_package
+↓
+Incident Package
+```
+
+```text
+Event Collection
+↓
+correlate_security_events
+↓
+Attack Chain Analysis
+↓
+Recommended Runbooks
+↓
+Incident Package
+```
+
+Outputs:
+
+- Incident summary
+- Alert classification (when applicable)
+- Investigation or correlation results
+- Runbook(s)
+- Detection package (when applicable)
+- Ticket note or analyst documentation guidance
+- Recommended next steps
+- Analyst note
+
+No API calls, SSH commands, or external lookups are performed. This tool orchestrates other MCP tools only.
 
 ---
 
@@ -829,6 +903,8 @@ Completed:
 
 ✅ Multi-Alert Correlation
 
+✅ Security Copilot-Style Investigation Chains
+
 ✅ Real system inventory and uptime collection from aihost
 
 ---
@@ -839,7 +915,8 @@ Suggested future phases (SOC and detection engineering focus):
 
 - Threat intelligence enrichment for source IPs and observables
 - Splunk SPL query generation for hunt and detection workflows
-- Security Copilot-style investigation chains that orchestrate multiple MCP tools
+- Incident report generation
+- Analyst decision review checklist
 
 ---
 
@@ -858,7 +935,7 @@ Real telemetry samples (for example `sample_data/aihost_*.log`) are listed in `.
 - Threat Intelligence Enrichment
 - IOC Reputation Lookups
 - Splunk SPL Query Generation
-- Security Copilot-Style Investigation Chains
+- Incident Report Generation
 - Integration with Future AI Security Labs
 
 ---

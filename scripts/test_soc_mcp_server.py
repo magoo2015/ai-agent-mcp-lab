@@ -20,6 +20,7 @@ from soc_mcp_server import (  # noqa: E402
     generate_investigation_runbook,
     generate_qradar_aql_detection,
     investigate_command_execution,
+    investigate_security_incident,
     investigate_ssh_alert,
     parse_wazuh_alert,
 )
@@ -389,6 +390,123 @@ def test_generate_qradar_aql_detection_unsupported() -> None:
     assert "Unsupported alert_type" in result["analyst_note"]
 
 
+INCIDENT_REQUIRED_KEYS = [
+    "status",
+    "input_type",
+    "workflow_used",
+    "incident_summary",
+    "alert_classification",
+    "investigation_results",
+    "correlation_results",
+    "runbook",
+    "detection_package",
+    "ticket_note",
+    "recommended_next_steps",
+    "analyst_note",
+]
+
+
+def test_investigate_security_incident_unsupported_input_type() -> None:
+    """investigate_security_incident should reject unsupported input types."""
+    result = json.loads(
+        investigate_security_incident(input_type="malware_scan")
+    )
+
+    assert result["status"] == "error"
+    assert "wazuh_alert" in result["analyst_note"]
+    assert "command_execution" in result["analyst_note"]
+    assert "event_collection" in result["analyst_note"]
+
+
+def test_investigate_security_incident_empty_command() -> None:
+    """investigate_security_incident should require command for command_execution."""
+    result = json.loads(
+        investigate_security_incident(
+            input_type="command_execution",
+            command="",
+        )
+    )
+
+    assert result["status"] == "error"
+    assert "command" in result["analyst_note"].lower()
+
+
+def test_investigate_security_incident_wazuh_alert_chain() -> None:
+    """investigate_security_incident should chain Wazuh SSH alert tools."""
+    result = json.loads(
+        investigate_security_incident(
+            input_type="wazuh_alert",
+            file_path=WAZUH_ALERT_PATH,
+        )
+    )
+
+    for key in INCIDENT_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+    assert result["status"] == "ok"
+    assert result["input_type"] == "wazuh_alert"
+    assert "identify_alert_type" in result["workflow_used"]
+    assert "investigate_ssh_alert" in result["workflow_used"]
+    assert "generate_detection_package" in result["workflow_used"]
+    assert "generate_soc_ticket_note" in result["workflow_used"]
+    assert result["investigation_results"] is not None
+    assert result["detection_package"] is not None
+    assert result["ticket_note"] is not None
+    assert isinstance(result["ticket_note"], str)
+    assert len(result["ticket_note"]) > 0
+
+
+def test_investigate_security_incident_command_execution_chain() -> None:
+    """investigate_security_incident should chain command execution tools."""
+    result = json.loads(
+        investigate_security_incident(
+            input_type="command_execution",
+            command=SAMPLE_COMMAND,
+            hostname="ubuntu-agent",
+            username="sysadmin",
+            source_ip="192.168.1.50",
+        )
+    )
+
+    for key in INCIDENT_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+    assert result["status"] == "ok"
+    assert result["input_type"] == "command_execution"
+    assert result["investigation_results"]["severity"] in ("low", "medium", "high")
+    assert result["runbook"]["status"] == "ok"
+    assert result["runbook"]["alert_type"] == "suspicious_command_execution"
+    assert result["detection_package"] is not None
+    assert "engineering_summary" in result["detection_package"]
+
+
+def test_investigate_security_incident_event_collection_chain() -> None:
+    """investigate_security_incident should correlate events and recommend runbooks."""
+    result = json.loads(
+        investigate_security_incident(
+            input_type="event_collection",
+            events=[SSH_EVENT, AUTH_EVENT, CMD_EVENT],
+        )
+    )
+
+    for key in INCIDENT_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+    assert result["status"] == "ok"
+    assert result["input_type"] == "event_collection"
+    assert result["correlation_results"] is not None
+    assert result["correlation_results"]["possible_attack_chain"] == [
+        "Initial Access",
+        "Valid Accounts",
+        "Command Execution",
+    ]
+    assert result["recommended_next_steps"]
+    assert result["runbook"] is not None
+    assert "ssh_auth_failure" in result["runbook"]
+    assert "linux_auth_activity" in result["runbook"]
+    assert "suspicious_command_execution" in result["runbook"]
+
+
 def test_generate_detection_package_includes_qradar() -> None:
     """generate_detection_package should include qradar_aql_detection."""
     result_raw = generate_detection_package(
@@ -457,6 +575,21 @@ def main() -> None:
 
     test_generate_detection_package_includes_qradar()
     print("PASS: generate_detection_package includes qradar_aql_detection")
+
+    test_investigate_security_incident_unsupported_input_type()
+    print("PASS: investigate_security_incident unsupported input type")
+
+    test_investigate_security_incident_empty_command()
+    print("PASS: investigate_security_incident empty command")
+
+    test_investigate_security_incident_wazuh_alert_chain()
+    print("PASS: investigate_security_incident wazuh alert chain")
+
+    test_investigate_security_incident_command_execution_chain()
+    print("PASS: investigate_security_incident command execution chain")
+
+    test_investigate_security_incident_event_collection_chain()
+    print("PASS: investigate_security_incident event collection chain")
 
     print("\nAll SOC MCP server checks passed.")
 
