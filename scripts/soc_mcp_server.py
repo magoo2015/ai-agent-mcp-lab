@@ -1,6 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 import json
 import re
+import subprocess
 from pathlib import Path
 
 mcp = FastMCP("soc-assistant")
@@ -2070,6 +2071,311 @@ def generate_detection_package(
         "sentinel_analytic_rule": sentinel_rule,
         "qradar_aql_detection": qradar_rule,
         "engineering_summary": engineering_summary,
+    }
+
+    return json.dumps(result, indent=2)
+
+
+# --- Remote host inventory (read-only SSH) ---
+
+_INVENTORY_SEP = "---SEP---"
+_UNSAFE_HOST_CHARS = re.compile(r"[^\w.\-]")
+
+
+def _normalize_host(host: str) -> str:
+    """Validate host input for SSH (strip, blank default, reject unsafe chars).
+
+    Does not read ~/.ssh/config, does not resolve aliases, and does not build
+    user@host strings. The returned value is passed verbatim to ssh.
+    """
+    ssh_host = (host or "").strip()
+    if not ssh_host:
+        ssh_host = "aihost"
+    if _UNSAFE_HOST_CHARS.search(ssh_host):
+        raise ValueError(
+            f"Invalid host '{host}': only letters, digits, dots, hyphens, "
+            "and underscores are allowed."
+        )
+    return ssh_host
+
+
+def _run_ssh_readonly(
+    host: str,
+    remote_command: str,
+    timeout: int = 15,
+) -> dict:
+    """Run a single read-only command on a remote host via SSH (no shell=True)."""
+    try:
+        # host is passed verbatim to ssh; only strip/default validation happens upstream
+        completed = subprocess.run(
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                host,
+                remote_command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "stdout": "",
+            "stderr": f"SSH command timed out after {timeout} seconds.",
+            "returncode": -1,
+        }
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "stdout": "",
+            "stderr": "ssh command not found on this system.",
+            "returncode": -1,
+        }
+
+    return {
+        "ok": completed.returncode == 0,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "returncode": completed.returncode,
+    }
+
+
+def _parse_os_release(text: str) -> str:
+    pretty_name = ""
+    name = ""
+    version = ""
+    for line in text.splitlines():
+        if line.startswith("PRETTY_NAME="):
+            pretty_name = line.split("=", 1)[1].strip().strip('"')
+        elif line.startswith("NAME=") and not line.startswith("VERSION"):
+            name = line.split("=", 1)[1].strip().strip('"')
+        elif line.startswith("VERSION="):
+            version = line.split("=", 1)[1].strip().strip('"')
+    if pretty_name:
+        return pretty_name
+    if name and version:
+        return f"{name} {version}"
+    return name or version or ""
+
+
+def _parse_lscpu(text: str) -> tuple[str, int]:
+    cpu_model = ""
+    cpu_cores = 0
+    for line in text.splitlines():
+        if line.startswith("Model name:"):
+            cpu_model = line.split(":", 1)[1].strip()
+        elif line.startswith("CPU(s):"):
+            try:
+                cpu_cores = int(line.split(":", 1)[1].strip())
+            except ValueError:
+                cpu_cores = 0
+    return cpu_model, cpu_cores
+
+
+def _parse_free_m(text: str) -> int:
+    for line in text.splitlines():
+        if line.startswith("Mem:"):
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    return int(parts[1])
+                except ValueError:
+                    return 0
+    return 0
+
+
+def _parse_df_root(text: str) -> str:
+    lines = [line for line in text.strip().splitlines() if line.strip()]
+    if len(lines) < 2:
+        return ""
+    parts = lines[-1].split()
+    if len(parts) >= 5:
+        used = parts[2]
+        total = parts[1]
+        pct = parts[4]
+        return f"{used}/{total} ({pct})"
+    return lines[-1]
+
+
+def _parse_loadavg(text: str) -> dict:
+    parts = text.strip().split()
+    if len(parts) >= 3:
+        return {"1m": parts[0], "5m": parts[1], "15m": parts[2]}
+    return {"1m": "", "5m": "", "15m": ""}
+
+
+def _parse_who_users(text: str) -> list[str]:
+    users: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        username = line.split()[0]
+        if username not in seen:
+            seen.add(username)
+            users.append(username)
+    return users
+
+
+def _parse_who_boot(text: str) -> str:
+    for line in text.splitlines():
+        if "system boot" in line.lower():
+            return line.split("system boot", 1)[1].strip()
+    return text.strip()
+
+
+def _empty_inventory() -> dict:
+    return {
+        "hostname": "",
+        "operating_system": "",
+        "kernel_version": "",
+        "uptime": "",
+        "cpu_model": "",
+        "cpu_cores": 0,
+        "total_memory_mb": 0,
+        "disk_usage_root": "",
+        "load_average": {"1m": "", "5m": "", "15m": ""},
+        "logged_in_users": [],
+        "last_boot_time": "",
+    }
+
+
+def _build_inventory_remote_script() -> str:
+    """Build a single remote shell script with delimiter-separated read-only commands."""
+    commands = [
+        "hostname",
+        "uname -r",
+        "uptime -p",
+        "lscpu",
+        "free -m",
+        "df -h /",
+        "cat /proc/loadavg",
+        "who",
+        "who -b",
+        "cat /etc/os-release",
+    ]
+    parts = []
+    for cmd in commands:
+        parts.append(cmd)
+        parts.append(f"echo {_INVENTORY_SEP}")
+    return "; ".join(parts)
+
+
+@mcp.tool()
+def get_system_inventory(host: str = "aihost") -> str:
+    """
+    Collect system inventory and uptime information from a remote Linux host
+    using safe, read-only SSH commands.
+
+    Default host is 'aihost'. Requires key-based SSH access (BatchMode) from
+    the machine running this MCP server. No API calls, no package installs,
+    and no destructive commands are run.
+    """
+    try:
+        ssh_host = _normalize_host(host)
+    except ValueError as exc:
+        return json.dumps(
+            {
+                "status": "error",
+                "host": host,
+                "inventory": _empty_inventory(),
+                "summary": str(exc),
+                "analyst_note": (
+                    "Host validation failed before any SSH command was run. "
+                    "Use a simple hostname or SSH config alias such as 'aihost'."
+                ),
+            },
+            indent=2,
+        )
+
+    remote_script = _build_inventory_remote_script()
+    ssh_result = _run_ssh_readonly(ssh_host, remote_script, timeout=30)
+
+    if not ssh_result["ok"]:
+        stderr = ssh_result["stderr"].strip()
+        summary = (
+            f"Failed to collect inventory from {ssh_host} via SSH."
+        )
+        if stderr:
+            summary += f" {stderr}"
+        return json.dumps(
+            {
+                "status": "error",
+                "host": ssh_host,
+                "inventory": _empty_inventory(),
+                "summary": summary,
+                "analyst_note": (
+                    "SSH connection or remote command failed. Verify that "
+                    f"'ssh {ssh_host} hostname' works from this machine, "
+                    "that key-based authentication is configured, and that the "
+                    "host is reachable. This tool runs read-only commands only; "
+                    "no API calls are made."
+                ),
+            },
+            indent=2,
+        )
+
+    segments = ssh_result["stdout"].split(_INVENTORY_SEP)
+    # Trailing echo produces an extra empty segment after the last command.
+    segments = [seg.strip() for seg in segments if seg.strip()]
+
+    inventory = _empty_inventory()
+    if len(segments) >= 1:
+        inventory["hostname"] = segments[0]
+    if len(segments) >= 2:
+        inventory["kernel_version"] = segments[1]
+    if len(segments) >= 3:
+        inventory["uptime"] = segments[2]
+    if len(segments) >= 4:
+        cpu_model, cpu_cores = _parse_lscpu(segments[3])
+        inventory["cpu_model"] = cpu_model
+        inventory["cpu_cores"] = cpu_cores
+    if len(segments) >= 5:
+        inventory["total_memory_mb"] = _parse_free_m(segments[4])
+    if len(segments) >= 6:
+        inventory["disk_usage_root"] = _parse_df_root(segments[5])
+    if len(segments) >= 7:
+        inventory["load_average"] = _parse_loadavg(segments[6])
+    if len(segments) >= 8:
+        inventory["logged_in_users"] = _parse_who_users(segments[7])
+    if len(segments) >= 9:
+        inventory["last_boot_time"] = _parse_who_boot(segments[8])
+    if len(segments) >= 10:
+        inventory["operating_system"] = _parse_os_release(segments[9])
+
+    load = inventory["load_average"]
+    user_count = len(inventory["logged_in_users"])
+    summary = (
+        f"Host {inventory['hostname'] or ssh_host} "
+        f"({inventory['operating_system'] or 'unknown OS'}) — "
+        f"uptime {inventory['uptime'] or 'unknown'}, "
+        f"{inventory['cpu_cores']} CPU core(s), "
+        f"{inventory['total_memory_mb']} MB RAM, "
+        f"root disk {inventory['disk_usage_root'] or 'unknown'}, "
+        f"load {load['1m']}/{load['5m']}/{load['15m']}, "
+        f"{user_count} logged-in user(s)."
+    )
+
+    analyst_note = (
+        "This tool collects read-only system facts via SSH for baseline host "
+        "context before investigations or detections. It extracts inventory "
+        "only; the AI should interpret anomalies, compare against expected "
+        "baselines, and determine severity. Assumes key-based SSH to the "
+        "target host. No API calls or destructive commands are run from this "
+        "MCP server."
+    )
+
+    result = {
+        "status": "ok",
+        "host": ssh_host,
+        "inventory": inventory,
+        "summary": summary,
+        "analyst_note": analyst_note,
     }
 
     return json.dumps(result, indent=2)

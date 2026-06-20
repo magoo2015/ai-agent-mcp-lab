@@ -351,6 +351,26 @@ Scoring factors include:
 
 ---
 
+### get_system_inventory
+
+Purpose:
+
+Collect system inventory and uptime data from aihost using safe SSH commands.
+
+Inputs:
+
+- `host` (string, default: `"aihost"`)
+
+Outputs:
+
+- Hostname, OS, kernel, uptime, CPU, memory, disk, load averages
+- Logged-in users and last boot time
+- Summary and analyst note
+
+Uses read-only SSH commands only (no API calls, no package installs).
+
+---
+
 ### score_ssh_alert
 
 Calculates:
@@ -653,6 +673,14 @@ Completed:
 ✅ Detection Recommendations Embedded in Investigation Workflows
 
 ✅ Real aihost telemetry parsing (`parse_linux_auth_log`, `analyze_linux_auth_activity`)
+
+✅ Real system inventory and uptime collection from aihost
+
+---
+
+# Next Steps
+
+- Use get_system_inventory to establish baseline host context for future investigations and detections.
 
 ---
 
