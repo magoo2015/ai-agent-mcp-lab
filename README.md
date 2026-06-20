@@ -21,6 +21,7 @@ This project demonstrates:
 - IBM QRadar AQL Detection Generation
 - Analyst Decision Support
 - AI-Assisted SOC Investigations
+- AI-Assisted Investigation Runbook Generation
 
 Key capabilities include:
 
@@ -29,6 +30,7 @@ Key capabilities include:
 - Suspicious Command Execution Investigations
 - Severity and Confidence Scoring
 - Investigation Summary Generation
+- AI-Assisted Investigation Runbook Generation
 - Security Ticket Generation
 - Analyst Action Recommendations
 - Security Query Generation
@@ -228,6 +230,7 @@ Returns:
 - Investigation Summary
 - Recommended Queries
 - Next Action
+- Investigation Runbook
 
 Workflow:
 
@@ -280,6 +283,7 @@ Outputs:
 - Recommended Queries
 - Recommended Actions
 - Analyst Notes
+- Investigation Runbook
 
 ---
 
@@ -341,6 +345,7 @@ Outputs:
 - Recommended actions
 - Analyst notes
 - Parsed activity summary
+- Investigation runbook
 
 Scoring factors include:
 
@@ -396,6 +401,60 @@ Creates:
 - Risk Assessment
 - Recommended Actions
 - Analyst Notes
+
+---
+
+### generate_investigation_runbook
+
+Purpose:
+
+Generate a reusable SOC investigation runbook based on alert type, severity, and confidence score. Returns structured JSON only (no API calls, SSH, or external lookups).
+
+Inputs:
+
+- `alert_type` (string)
+- `severity` (string, default: `"medium"`)
+- `confidence_score` (integer, default: `60`)
+
+Supported alert types:
+
+| Alert Type                   | Runbook focus                                              |
+| ---------------------------- | ---------------------------------------------------------- |
+| ssh_auth_failure             | Failed logins, brute force, success-after-failure, EDR/SIEM |
+| suspicious_command_execution | Command review, MITRE mapping, download-and-execute        |
+| linux_auth_activity          | Auth log counts, publickey validation, SSH hardening       |
+| unknown                      | Observable collection, enrichment, classification        |
+
+Outputs:
+
+- Runbook title and purpose
+- Required inputs for analysts
+- Step-by-step investigation steps
+- Escalation criteria
+- Containment considerations
+- Detection engineering opportunities
+- Recommended MCP tools for follow-on work
+- Ticket documentation guidance
+- Analyst note
+
+Example output fields:
+
+```json
+{
+  "status": "ok",
+  "runbook_title": "SSH Authentication Failure Investigation Runbook",
+  "alert_type": "ssh_auth_failure",
+  "investigation_steps": ["Review failed login events...", "..."],
+  "recommended_mcp_tools": ["investigate_ssh_alert", "generate_wazuh_query"]
+}
+```
+
+Cybersecurity career relevance:
+
+- Runbook and playbook authoring for tier-1 and tier-2 SOC consistency
+- Standardizing investigation steps across alert types
+- Bridging alert triage with detection engineering follow-up
+- AI-assisted SOC operations where agents produce analyst-ready workflows
 
 ---
 
@@ -674,13 +733,20 @@ Completed:
 
 ✅ Real aihost telemetry parsing (`parse_linux_auth_log`, `analyze_linux_auth_activity`)
 
+✅ AI-Assisted Investigation Runbook Generation
+
 ✅ Real system inventory and uptime collection from aihost
 
 ---
 
 # Next Steps
 
-- Use get_system_inventory to establish baseline host context for future investigations and detections.
+Suggested future phases (SOC and detection engineering focus):
+
+- Multi-alert correlation across related SSH, command, and auth telemetry
+- Threat intelligence enrichment for source IPs and observables
+- Splunk SPL query generation for hunt and detection workflows
+- Security Copilot-style investigation chains that orchestrate multiple MCP tools
 
 ---
 
@@ -700,7 +766,6 @@ Real telemetry samples (for example `sample_data/aihost_*.log`) are listed in `.
 - IOC Reputation Lookups
 - Splunk SPL Query Generation
 - Multi-Alert Correlation
-- Detection Engineering Recommendations
 - Security Copilot-Style Investigation Chains
 - Integration with Future AI Security Labs
 

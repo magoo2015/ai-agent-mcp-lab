@@ -196,7 +196,9 @@ def analyze_linux_auth_activity(file_path: str) -> str:
     """
     Analyze parsed Linux SSH/auth log activity from a local telemetry sample
     and produce SOC-style triage guidance. Reuses parse_linux_auth_log parsing
-    logic. No SSH commands or API calls.
+    logic and generate_investigation_runbook. No SSH commands or API calls.
+
+    Returns investigation_runbook alongside risk scoring and parsed activity.
     """
     requested_path = (LAB_ROOT / file_path).resolve()
 
@@ -353,6 +355,15 @@ def analyze_linux_auth_activity(file_path: str) -> str:
         "analyst_notes": analyst_notes,
         "parsed_activity": parsed_activity,
     }
+
+    runbook = json.loads(
+        generate_investigation_runbook(
+            alert_type="linux_auth_activity",
+            severity=risk_level,
+            confidence_score=confidence_score,
+        )
+    )
+    result["investigation_runbook"] = runbook
 
     return json.dumps(result, indent=2)
 
@@ -1005,6 +1016,306 @@ def generate_investigation_summary(
     return json.dumps(result, indent=2)
 
 
+SUPPORTED_RUNBOOK_ALERT_TYPES = {
+    "ssh_auth_failure",
+    "suspicious_command_execution",
+    "linux_auth_activity",
+    "unknown",
+}
+
+
+@mcp.tool()
+def generate_investigation_runbook(
+    alert_type: str,
+    severity: str = "medium",
+    confidence_score: int = 60,
+) -> str:
+    """
+    Generate a reusable SOC investigation runbook based on alert type, severity,
+    and confidence score. Returns structured JSON only (no API calls, SSH, or
+    external lookups).
+    """
+    severity_key = severity.lower()
+    unrecognized_note = ""
+
+    if alert_type not in SUPPORTED_RUNBOOK_ALERT_TYPES:
+        unrecognized_note = (
+            f"Input alert_type '{alert_type}' is not recognized; "
+            "using the generic unknown alert runbook. "
+        )
+        effective_alert_type = "unknown"
+    else:
+        effective_alert_type = alert_type
+
+    if confidence_score <= 39:
+        confidence_label = "low"
+    elif confidence_score <= 69:
+        confidence_label = "moderate"
+    else:
+        confidence_label = "high"
+
+    if effective_alert_type == "ssh_auth_failure":
+        runbook_title = "SSH Authentication Failure Investigation Runbook"
+        purpose = (
+            "Guide analysts through triage of SSH authentication failure alerts, "
+            "including brute-force validation and success-after-failure review."
+        )
+        required_inputs = [
+            "Source IP address",
+            "Target username",
+            "Host or agent name",
+            "Rule ID and rule description (if from SIEM)",
+            "Failed login count in a defined time window",
+            "Whether a successful login followed failures from the same source IP",
+            "Whether the source IP is a known admin or jump host",
+        ]
+        investigation_steps = [
+            "Review failed login events for volume, timing, and targeted accounts.",
+            "Analyze the source IP for prior activity, geo context, and reputation (manual).",
+            "Review the target account for privilege level, expected access, and lockout status.",
+            "Determine whether root or other high-value accounts were targeted.",
+            "Validate brute-force patterns (for example, >=10 failures in 10 minutes).",
+            "Check for successful login after repeated failures from the same source IP.",
+            "Confirm whether the source IP matches known admin or jump host inventory.",
+            "Correlate SSH auth logs with SIEM alerts and EDR process activity on the host.",
+        ]
+        recommended_mcp_tools = [
+            "parse_wazuh_alert",
+            "score_ssh_alert",
+            "investigate_ssh_alert",
+            "generate_wazuh_query",
+            "generate_defender_kql",
+            "generate_investigation_summary",
+            "generate_soc_ticket_note",
+            "generate_detection_recommendation",
+        ]
+        detection_engineering_opportunities = [
+            "Brute-force correlation (multiple failures in a short window)",
+            "Success-after-failure detection from the same source IP",
+            "Root login from uncommon source IP",
+            "Threshold-based SSH failure alerting tuned to your environment",
+        ]
+        ticket_documentation_guidance = [
+            "Document source IP, target user, host, and rule metadata.",
+            "Record failed login count and time window used for brute-force assessment.",
+            "Note whether success-after-failure or known admin host context applies.",
+            "Capture SIEM/EDR correlation findings and final disposition.",
+        ]
+    elif effective_alert_type == "suspicious_command_execution":
+        runbook_title = "Suspicious Command Execution Investigation Runbook"
+        purpose = (
+            "Guide analysts through review of suspicious command-line activity, "
+            "including download-and-execute and obfuscation patterns."
+        )
+        required_inputs = [
+            "Full command line or process arguments",
+            "Username that executed the command",
+            "Hostname or device name",
+            "Parent process name and command line",
+            "Timestamp of execution",
+            "Source IP or session context (if available)",
+        ]
+        investigation_steps = [
+            "Review the full command line for download tools, pipes, encoding, or obfuscation.",
+            "Review the user account for role, expected activity, and recent privilege changes.",
+            "Review the host for asset criticality, patch level, and prior alerts.",
+            "Review the parent process for unexpected launchers (for example, office apps spawning shells).",
+            "Check for download-and-execute patterns (curl/wget piped to bash or similar).",
+            "Review PowerShell usage for encoded commands or suspicious flags.",
+            "Review certutil usage for download, decode, or cache abuse.",
+            "Review network connections around the execution time for C2 or payload retrieval.",
+            "Map observed behavior to MITRE ATT&CK techniques for reporting and detection gaps.",
+        ]
+        recommended_mcp_tools = [
+            "investigate_command_execution",
+            "generate_defender_kql",
+            "generate_detection_recommendation",
+            "generate_sigma_rule",
+            "generate_detection_package",
+        ]
+        detection_engineering_opportunities = [
+            "Download-and-execute command-line detections (curl/wget + shell)",
+            "PowerShell encoded command monitoring",
+            "Certutil abuse detections",
+            "Parent-child process anomaly rules for suspicious interpreters",
+        ]
+        ticket_documentation_guidance = [
+            "Document the full command line, user, host, and parent process.",
+            "List matched suspicious indicators and MITRE techniques.",
+            "Record hunt query results and any confirmed malicious artifacts.",
+            "Document containment actions taken and escalation rationale.",
+        ]
+    elif effective_alert_type == "linux_auth_activity":
+        runbook_title = "Linux Auth Activity Investigation Runbook"
+        purpose = (
+            "Guide analysts through review of Linux SSH/auth log samples for "
+            "failed logins, successful access, and hardening validation."
+        )
+        required_inputs = [
+            "Auth log file path or exported sample",
+            "Time range covered by the sample",
+            "Host identity and criticality",
+            "Expected admin source IPs or jump hosts",
+            "SSH authentication policy (password vs publickey)",
+        ]
+        investigation_steps = [
+            "Count failed login events and compare against brute-force thresholds.",
+            "Count successful login events and identify authentication methods used.",
+            "Review unique source IPs for expected vs unexpected origins.",
+            "Review targeted usernames for privilege level and account validity.",
+            "Validate whether successful logins used publickey only with zero password failures.",
+            "Analyze success-after-failure sequences from the same source IP.",
+            "Validate SSH hardening settings align with policy (for example, key-only access).",
+        ]
+        recommended_mcp_tools = [
+            "parse_linux_auth_log",
+            "analyze_linux_auth_activity",
+            "generate_wazuh_query",
+            "generate_detection_recommendation",
+        ]
+        detection_engineering_opportunities = [
+            "Auth log threshold alerts for repeated failures",
+            "Success-after-failure correlation from parsed auth telemetry",
+            "Alerts for password auth when only publickey is intended",
+            "Distributed SSH failure detection across multiple source IPs",
+        ]
+        ticket_documentation_guidance = [
+            "Document failed and successful login counts from the parsed sample.",
+            "List unique source IPs and users observed.",
+            "Note success-after-failure or publickey-only patterns.",
+            "Record hardening validation results and recommended follow-up.",
+        ]
+    else:
+        runbook_title = "Generic SOC Investigation Runbook"
+        purpose = (
+            "Provide a baseline investigation workflow when the alert type is "
+            "unknown or not yet classified."
+        )
+        required_inputs = [
+            "Raw alert payload or log excerpt",
+            "Timestamp and source system",
+            "Host, user, and network observables available in the alert",
+            "Any prior related tickets or alerts",
+        ]
+        investigation_steps = [
+            "Collect all available observables from the alert and surrounding logs.",
+            "Enrich the alert with host identity, user context, and asset criticality.",
+            "Use classification guidance to map the alert to a known workflow if possible.",
+            "Correlate the alert with related SIEM events in a wider time window.",
+            "Document findings, disposition, and gaps for follow-up detection work.",
+        ]
+        recommended_mcp_tools = [
+            "identify_alert_type",
+            "parse_wazuh_alert",
+            "generate_investigation_summary",
+            "generate_soc_ticket_note",
+        ]
+        detection_engineering_opportunities = [
+            "Document alert type and observables before building new rules",
+            "Review existing SIEM rules for overlap or tuning opportunities",
+            "Consider baseline behavioral detections once the alert is classified",
+        ]
+        ticket_documentation_guidance = [
+            "Document raw observables and enrichment steps performed.",
+            "Record classification outcome (known type vs still unknown).",
+            "Capture SIEM correlation results and analyst disposition.",
+            "Note telemetry gaps that blocked confident classification.",
+        ]
+
+    if severity_key == "high" or confidence_score >= 70:
+        escalation_criteria = [
+            "Escalate immediately when severity is high or confidence is elevated (>=70).",
+            "Notify on-call or tier-2 per priority procedures.",
+            "Assign a senior analyst if success-after-failure or active compromise is suspected.",
+            "Preserve logs and artifacts before containment actions.",
+        ]
+    elif severity_key == "medium" or confidence_score >= 40:
+        escalation_criteria = [
+            "Escalate if additional corroborating events appear during investigation.",
+            "Engage tier-2 when confidence reaches >=70 or severity increases.",
+            "Continue targeted correlation before closing as benign.",
+        ]
+    else:
+        escalation_criteria = [
+            "Routine monitoring is acceptable when severity and confidence remain low.",
+            "Escalate only if new failures, successes, or related alerts emerge.",
+            "Reassess if observables change or enrichment raises confidence.",
+        ]
+
+    if effective_alert_type == "ssh_auth_failure":
+        if severity_key == "high" or confidence_score >= 70:
+            containment_considerations = [
+                "Evaluate blocking the source IP at the firewall if unauthorized.",
+                "Review active sessions on the target host for the affected user.",
+                "Consider restricting SSH access or enforcing key-only authentication.",
+                "Do not take destructive action without approval and evidence.",
+            ]
+        else:
+            containment_considerations = [
+                "Continue monitoring before containment unless policy requires action.",
+                "Validate source IP against admin inventory before blocking.",
+                "Review SSH hardening posture if repeated failures persist.",
+            ]
+    elif effective_alert_type == "suspicious_command_execution":
+        if severity_key == "high" or confidence_score >= 70:
+            containment_considerations = [
+                "Evaluate host isolation if malicious download-and-execute is confirmed.",
+                "Block related URLs, hashes, or IPs after validation.",
+                "Preserve process, network, and file creation logs for IR.",
+                "Do not isolate production systems without approval.",
+            ]
+        else:
+            containment_considerations = [
+                "Gather parent process and network context before containment.",
+                "Confirm whether the command aligns with approved automation.",
+                "Escalate containment decisions when confidence increases.",
+            ]
+    elif effective_alert_type == "linux_auth_activity":
+        if severity_key == "high" or confidence_score >= 70:
+            containment_considerations = [
+                "Review active sessions immediately if success-after-failure is confirmed.",
+                "Evaluate restricting source IPs involved in suspicious auth sequences.",
+                "Preserve auth logs before making access policy changes.",
+            ]
+        else:
+            containment_considerations = [
+                "Validate publickey-only access policy before restricting users.",
+                "Monitor for increasing failure volume before blocking sources.",
+            ]
+    else:
+        containment_considerations = [
+            "Preserve original alert data and related logs before making changes.",
+            "Avoid containment until the alert is classified and validated.",
+            "Escalate for IR guidance when impact or scope is unclear.",
+        ]
+
+    analyst_note = (
+        f"{unrecognized_note}"
+        f"Runbook tailored for {effective_alert_type} at {severity_key} severity "
+        f"with {confidence_label} confidence ({confidence_score}/100). "
+        "This is a reusable analyst playbook template; adapt steps to your "
+        "environment and run SIEM/EDR queries manually. "
+        "No actions are executed automatically from this MCP server."
+    )
+
+    result = {
+        "status": "ok",
+        "runbook_title": runbook_title,
+        "alert_type": effective_alert_type,
+        "purpose": purpose,
+        "required_inputs": required_inputs,
+        "investigation_steps": investigation_steps,
+        "escalation_criteria": escalation_criteria,
+        "containment_considerations": containment_considerations,
+        "detection_engineering_opportunities": detection_engineering_opportunities,
+        "recommended_mcp_tools": recommended_mcp_tools,
+        "ticket_documentation_guidance": ticket_documentation_guidance,
+        "analyst_note": analyst_note,
+    }
+
+    return json.dumps(result, indent=2)
+
+
 @mcp.tool()
 def generate_soc_ticket_note(
     source_ip: str,
@@ -1237,8 +1548,8 @@ def investigate_ssh_alert(
     parse, score, summarize, generate hunt queries, and recommend the next
     analyst action. No API calls.
     Reuses parse_wazuh_alert, score_ssh_alert, generate_investigation_summary,
-    generate_wazuh_query, generate_defender_kql, recommend_next_action, and
-    generate_detection_recommendation.
+    generate_wazuh_query, generate_defender_kql, recommend_next_action,
+    generate_detection_recommendation, and generate_investigation_runbook.
 
     Returns a complete SOC triage package:
     - alert_summary: parsed observables from the Wazuh alert file
@@ -1247,6 +1558,7 @@ def investigate_ssh_alert(
     - recommended_queries: Wazuh/OpenSearch and Defender/Sentinel KQL examples
     - next_action: recommended investigative step based on severity and confidence
     - detection_recommendations: post-investigation detection engineering guidance
+    - investigation_runbook: reusable analyst runbook for this alert type
 
     Optional enrichment (passed to score_ssh_alert) improves scoring when the
     analyst has context beyond the alert file:
@@ -1317,6 +1629,14 @@ def investigate_ssh_alert(
         )
     )
 
+    runbook = json.loads(
+        generate_investigation_runbook(
+            alert_type="ssh_auth_failure",
+            severity=scored["severity"],
+            confidence_score=scored["confidence_score"],
+        )
+    )
+
     result = {
         "alert_summary": parsed,
         "risk_score": scored,
@@ -1327,6 +1647,7 @@ def investigate_ssh_alert(
         },
         "next_action": next_action,
         "detection_recommendations": detection_recommendations,
+        "investigation_runbook": runbook,
     }
 
     return json.dumps(result, indent=2)
@@ -1343,8 +1664,9 @@ def investigate_command_execution(
     Analyze suspicious command execution activity such as curl, wget, bash,
     powershell, encoded commands, certutil, or payload download behavior.
     Returns structured JSON with scoring, MITRE mapping, hunt queries,
-    analyst guidance, and detection recommendations. No API calls.
-    Reuses generate_detection_recommendation.
+    analyst guidance, detection recommendations, and investigation runbook.
+    No API calls. Reuses generate_detection_recommendation and
+    generate_investigation_runbook.
     """
     if not command or not command.strip():
         return json.dumps(
@@ -1546,6 +1868,14 @@ def investigate_command_execution(
         )
     )
 
+    runbook = json.loads(
+        generate_investigation_runbook(
+            alert_type="suspicious_command_execution",
+            severity=severity,
+            confidence_score=confidence_score,
+        )
+    )
+
     result = {
         "status": "ok",
         "command_summary": command_summary,
@@ -1561,6 +1891,7 @@ def investigate_command_execution(
         "recommended_actions": recommended_actions,
         "analyst_notes": analyst_notes,
         "detection_recommendations": detection_recommendations,
+        "investigation_runbook": runbook,
     }
 
     return json.dumps(result, indent=2)

