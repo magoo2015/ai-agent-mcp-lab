@@ -1,5 +1,6 @@
 from datetime import datetime
 from mcp.server.fastmcp import FastMCP
+import ipaddress
 import json
 import re
 import subprocess
@@ -414,6 +415,7 @@ MITRE_TECHNIQUE_NAMES = {
     "T1059.001": "PowerShell",
     "T1027": "Obfuscated Files or Information",
     "T1140": "Deobfuscate/Decode Files or Information",
+    "T1566": "Phishing",
 }
 
 DEFAULT_MITRE_BY_ALERT_TYPE = {
@@ -466,6 +468,395 @@ def _build_mitre_mapping(
         )
 
     return mapping
+
+
+# --- Observable enrichment ---
+
+_SUPPORTED_OBSERVABLE_TYPES = frozenset({"ip", "domain", "url", "hash", "email"})
+
+_INTERNAL_DOMAIN_MARKERS = (
+    "localhost",
+    ".local",
+    "internal.local",
+    "corp.local",
+)
+
+_SUSPICIOUS_DOMAIN_KEYWORDS = (
+    "free-download",
+    "crack",
+    "keygen",
+)
+
+_URL_RISK_INDICATORS = (
+    "pastebin",
+    "raw.githubusercontent",
+    "wget",
+    "curl",
+    "download",
+    "payload",
+)
+
+_PHISHING_EMAIL_KEYWORDS = (
+    "urgent",
+    "verify",
+    "password-reset",
+    "helpdesk",
+)
+
+_ADMIN_EMAIL_PREFIXES = (
+    "admin@",
+    "security@",
+    "support@",
+)
+
+
+def _add_mitre_entry(entries: list[dict], technique_id: str) -> None:
+    for entry in entries:
+        if entry["technique_id"] == technique_id:
+            return
+    entries.append(
+        {
+            "technique_id": technique_id,
+            "name": _mitre_technique_name(technique_id),
+        }
+    )
+
+
+def _enrich_observable_logic(observable_type: str, observable_value: str) -> dict:
+    """Deterministic local enrichment for common SOC observables. No external lookups."""
+    obs_type = (observable_type or "").strip().lower()
+    obs_value = (observable_value or "").strip()
+
+    if not obs_value or obs_type not in _SUPPORTED_OBSERVABLE_TYPES:
+        return {"status": "error"}
+
+    related_mitre: list[dict] = []
+    recommendations: list[str] = []
+
+    if obs_type == "ip":
+        try:
+            ip_obj = ipaddress.ip_address(obs_value)
+        except ValueError:
+            return {
+                "status": "ok",
+                "observable_type": obs_type,
+                "observable_value": obs_value,
+                "observable_summary": (
+                    f"'{obs_value}' is not a valid IPv4 or IPv6 address."
+                ),
+                "reputation": "Invalid IP format",
+                "risk_level": "medium",
+                "related_mitre": [],
+                "investigation_recommendations": [
+                    "Verify the IP address was extracted correctly from the alert.",
+                    "Search for additional observables associated with the same event.",
+                ],
+                "analyst_notes": (
+                    "Invalid IP format detected during local enrichment. "
+                    "No external lookups were performed."
+                ),
+            }
+
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+            observable_summary = (
+                "Internal/private IP address. Observed frequently in lab scenarios."
+            )
+            reputation = "Internal Address"
+            risk_level = "low"
+            recommendations = [
+                "Validate whether this internal IP is expected in the environment.",
+                "Review related authentication events involving this address.",
+                "Search for additional observables tied to the same host or user.",
+            ]
+            analyst_notes = (
+                "Private or loopback address identified using local RFC1918 and "
+                "special-use range checks. No external threat intelligence was queried."
+            )
+        else:
+            observable_summary = (
+                "Potential external source. Requires validation against expected "
+                "inbound and outbound traffic."
+            )
+            reputation = "Potential external source"
+            risk_level = "medium"
+            _add_mitre_entry(related_mitre, "T1110")
+            recommendations = [
+                "Validate source IP ownership and expected business use.",
+                "Review related authentication events for brute-force or abuse patterns.",
+                "Search for additional observables from the same source.",
+                "Check command execution telemetry associated with this IP.",
+            ]
+            analyst_notes = (
+                "Public IP address identified locally. Treat as requiring validation "
+                "before closing the case. No external reputation feeds were queried."
+            )
+
+    elif obs_type == "domain":
+        domain_lower = obs_value.lower()
+        is_internal = any(
+            marker in domain_lower for marker in _INTERNAL_DOMAIN_MARKERS
+        )
+        suspicious_matches = [
+            keyword
+            for keyword in _SUSPICIOUS_DOMAIN_KEYWORDS
+            if keyword in domain_lower
+        ]
+
+        if is_internal and not suspicious_matches:
+            observable_summary = "Internal domain associated with private or lab infrastructure."
+            reputation = "Internal domain"
+            risk_level = "low"
+            recommendations = [
+                "Confirm the domain is managed internal infrastructure.",
+                "Review DNS and proxy logs for unexpected resolution patterns.",
+                "Search for additional observables linked to the same host.",
+            ]
+            analyst_notes = (
+                "Internal domain heuristics matched. No external domain reputation "
+                "lookups were performed."
+            )
+        elif suspicious_matches:
+            observable_summary = (
+                f"Domain contains suspicious keywords ({', '.join(suspicious_matches)}). "
+                "May indicate pirated software or malicious download infrastructure."
+            )
+            reputation = "Suspicious domain indicator"
+            risk_level = "high" if len(suspicious_matches) >= 2 else "medium"
+            if any(
+                keyword in domain_lower
+                for keyword in ("free-download", "download", "keygen", "crack")
+            ):
+                _add_mitre_entry(related_mitre, "T1105")
+            recommendations = [
+                "Review web proxy and DNS logs for related download activity.",
+                "Search for file hashes or URLs associated with this domain.",
+                "Check command execution telemetry for follow-on activity.",
+            ]
+            analyst_notes = (
+                "Suspicious domain keyword heuristics matched during local enrichment."
+            )
+        else:
+            observable_summary = (
+                "External domain without internal naming patterns. Requires validation."
+            )
+            reputation = "External domain"
+            risk_level = "medium"
+            recommendations = [
+                "Validate domain ownership and expected business use.",
+                "Review DNS and web proxy logs for related activity.",
+                "Search for additional observables from the same campaign.",
+            ]
+            analyst_notes = (
+                "External domain classified using local naming heuristics only."
+            )
+
+    elif obs_type == "url":
+        url_lower = obs_value.lower()
+        matched_indicators = [
+            indicator for indicator in _URL_RISK_INDICATORS if indicator in url_lower
+        ]
+        transfer_indicators = {
+            "pastebin",
+            "raw.githubusercontent",
+            "wget",
+            "curl",
+            "download",
+            "payload",
+        }
+        execution_indicators = {"wget", "curl", "payload"}
+
+        if matched_indicators:
+            observable_summary = (
+                f"URL contains suspicious indicators ({', '.join(matched_indicators)}). "
+                "May relate to payload retrieval or staging."
+            )
+            reputation = "Suspicious URL indicator"
+            risk_level = "high" if len(matched_indicators) >= 2 else "medium"
+            if transfer_indicators.intersection(matched_indicators):
+                _add_mitre_entry(related_mitre, "T1105")
+            if execution_indicators.intersection(matched_indicators):
+                _add_mitre_entry(related_mitre, "T1059")
+        else:
+            observable_summary = (
+                "External URL without high-risk keyword matches. Requires validation."
+            )
+            reputation = "External URL"
+            risk_level = "medium"
+
+        recommendations = [
+            "Review web proxy and command execution logs for related download activity.",
+            "Search for file hashes downloaded from this URL.",
+            "Check network telemetry for follow-on connections.",
+            "Validate whether the URL aligns with approved change activity.",
+        ]
+        analyst_notes = (
+            "URL enrichment uses local keyword heuristics only. "
+            "No external URL reputation services were queried."
+        )
+
+    elif obs_type == "hash":
+        hash_value = obs_value.strip().lower()
+        if re.fullmatch(r"[0-9a-f]+", hash_value):
+            hash_len = len(hash_value)
+            if hash_len == 32:
+                hash_type = "MD5"
+            elif hash_len == 40:
+                hash_type = "SHA1"
+            elif hash_len == 64:
+                hash_type = "SHA256"
+            else:
+                hash_type = "unknown"
+        else:
+            hash_type = "unknown"
+
+        if hash_type == "unknown":
+            observable_summary = (
+                "Hash value does not match common MD5, SHA1, or SHA256 lengths."
+            )
+            reputation = "Unrecognized hash format"
+            risk_level = "medium"
+        else:
+            observable_summary = (
+                f"{hash_type} file hash identified. Investigate prevalence and "
+                "execution context before assigning intent."
+            )
+            reputation = f"{hash_type} hash"
+            risk_level = "medium"
+
+        recommendations = [
+            "Search endpoint and EDR telemetry for file creation or execution events.",
+            "Review related command execution and download activity.",
+            "Search for additional observables from the same incident.",
+            "Preserve sample metadata if malware analysis is required.",
+        ]
+        analyst_notes = (
+            "Hash type identified by length and hex format only. "
+            "No external malware intelligence feeds were queried."
+        )
+
+    else:  # email
+        email_lower = obs_value.lower()
+        admin_match = any(
+            email_lower.startswith(prefix) for prefix in _ADMIN_EMAIL_PREFIXES
+        )
+        phishing_matches = [
+            keyword for keyword in _PHISHING_EMAIL_KEYWORDS if keyword in email_lower
+        ]
+
+        if phishing_matches:
+            observable_summary = (
+                f"Email address contains phishing-related indicators "
+                f"({', '.join(phishing_matches)})."
+            )
+            reputation = "Potential phishing indicator"
+            risk_level = "high" if len(phishing_matches) >= 2 else "medium"
+            _add_mitre_entry(related_mitre, "T1566")
+            recommendations = [
+                "Review email delivery history and message headers.",
+                "Search for similar sender patterns across the environment.",
+                "Validate with the recipient whether the message was expected.",
+                "Check for follow-on credential submission or download activity.",
+            ]
+            analyst_notes = (
+                "Phishing keyword heuristics matched during local email enrichment."
+            )
+        elif admin_match:
+            observable_summary = (
+                "Administrative or service mailbox naming pattern detected."
+            )
+            reputation = "Administrative account"
+            risk_level = "low"
+            recommendations = [
+                "Confirm the mailbox is an expected administrative or service account.",
+                "Review authentication and mail flow logs for unusual activity.",
+                "Search for additional observables in related alerts.",
+            ]
+            analyst_notes = (
+                "Administrative email prefix heuristics matched. "
+                "No external mailbox reputation lookups were performed."
+            )
+        else:
+            observable_summary = (
+                "Email address without strong phishing or admin naming indicators."
+            )
+            reputation = "Standard email address"
+            risk_level = "medium"
+            recommendations = [
+                "Review email delivery history for related messages.",
+                "Validate sender identity with the recipient or mail system owners.",
+                "Search for additional observables in the same campaign.",
+            ]
+            analyst_notes = (
+                "Email enrichment uses local naming heuristics only."
+            )
+
+    return {
+        "status": "ok",
+        "observable_type": obs_type,
+        "observable_value": obs_value,
+        "observable_summary": observable_summary,
+        "reputation": reputation,
+        "risk_level": risk_level,
+        "related_mitre": related_mitre,
+        "investigation_recommendations": recommendations,
+        "analyst_notes": analyst_notes,
+    }
+
+
+def _enrich_ips_from_events(events: list[dict], limit: int = 5) -> list[dict]:
+    """Enrich unique source IPs from correlated or normalized events."""
+    unique_ips: list[str] = []
+    seen: set[str] = set()
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        source_ip = (event.get("source_ip") or "").strip()
+        if not source_ip or source_ip == "unknown" or source_ip in seen:
+            continue
+        seen.add(source_ip)
+        unique_ips.append(source_ip)
+
+    enrichments: list[dict] = []
+    for ip_value in unique_ips[:limit]:
+        enrichment = _enrich_observable_logic("ip", ip_value)
+        if enrichment.get("status") == "ok":
+            enrichments.append(enrichment)
+    return enrichments
+
+
+def _enrich_observables_from_extracted(extracted: dict, limit: int = 5) -> list[dict]:
+    """Map extracted incident observables to local enrichment results."""
+    type_map = {"source_ip": "ip"}
+    enrichments: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    for item in _extract_observables_list(extracted):
+        enrich_type = type_map.get(item.get("type", ""))
+        value = (item.get("value") or "").strip()
+        if not enrich_type or not value or value == "unknown":
+            continue
+        key = (enrich_type, value)
+        if key in seen:
+            continue
+        seen.add(key)
+        enrichment = _enrich_observable_logic(enrich_type, value)
+        if enrichment.get("status") == "ok":
+            enrichments.append(enrichment)
+        if len(enrichments) >= limit:
+            break
+
+    return enrichments
+
+
+@mcp.tool()
+def enrich_observable(observable_type: str, observable_value: str) -> str:
+    """
+    Enrich a security observable with local investigation context and analyst guidance.
+    Supports ip, domain, url, hash, and email observables using deterministic
+    heuristics only. No API calls, web requests, or external threat intelligence feeds.
+    """
+    result = _enrich_observable_logic(observable_type, observable_value)
+    return json.dumps(result, indent=2)
 
 
 def _build_engineering_summary(
@@ -1902,6 +2293,21 @@ def investigate_command_execution(
         "investigation_runbook": runbook,
     }
 
+    observable_enrichment: list[dict] = []
+    if source_ip != "unknown":
+        ip_enrichment = _enrich_observable_logic("ip", source_ip)
+        if ip_enrichment.get("status") == "ok":
+            observable_enrichment.append(ip_enrichment)
+
+    url_match = re.search(r"https?://[^\s'\"]+", command)
+    if url_match:
+        url_enrichment = _enrich_observable_logic("url", url_match.group(0))
+        if url_enrichment.get("status") == "ok":
+            observable_enrichment.append(url_enrichment)
+
+    if observable_enrichment:
+        result["observable_enrichment"] = observable_enrichment
+
     return json.dumps(result, indent=2)
 
 
@@ -2369,6 +2775,12 @@ def correlate_security_events(events: list[dict]) -> str:
         "recommended_next_steps": recommended_next_steps,
         "analyst_note": analyst_note,
     }
+
+    observable_enrichment = _enrich_ips_from_events(
+        correlated_events or normalized_events
+    )
+    if observable_enrichment:
+        result["observable_enrichment"] = observable_enrichment
 
     return json.dumps(result, indent=2)
 
@@ -3820,6 +4232,8 @@ def _build_technical_report_sections(extracted: dict) -> dict:
             "Technical incident context was limited; provide investigation or correlation output for richer detail."
         )
 
+    enriched_observables = _enrich_observables_from_extracted(extracted)
+
     detection_opportunities = list(extracted.get("detection_gaps", []))
     detection_opportunities.extend(extracted.get("detection_opportunities", []))
 
@@ -3839,6 +4253,7 @@ def _build_technical_report_sections(extracted: dict) -> dict:
         "incident_timeline": extracted.get("attack_timeline", []),
         "affected_assets": _extract_affected_assets(extracted),
         "observables": _extract_observables_list(extracted),
+        "enriched_observables": enriched_observables,
         "mitre_mapping": extracted.get("mitre_mapping", []),
         "risk_assessment": _risk_assessment_dict(extracted, escalation_needed),
         "containment_recommendations": extracted.get("recommended_next_steps", []),

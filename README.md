@@ -28,6 +28,8 @@ This project demonstrates:
 - End-to-End Incident Investigation Orchestration
 - AI-Assisted Incident Report Generation
 - SOC and Executive Incident Reporting
+- Observable Enrichment
+- Threat Context Generation
 
 Key capabilities include:
 
@@ -40,6 +42,8 @@ Key capabilities include:
 - End-to-End Incident Investigation Orchestration
 - AI-Assisted Incident Report Generation
 - SOC and Executive Incident Reporting
+- Observable Enrichment
+- Threat Context Generation
 - Investigation Summary Generation
 - AI-Assisted Investigation Runbook Generation
 - Security Ticket Generation
@@ -494,7 +498,52 @@ Outputs:
 - Detection Opportunities
 - Lessons Learned
 
-Accepts output from `investigate_security_incident`, `investigate_ssh_alert`, `investigate_command_execution`, or `correlate_security_events`. Unsupported `report_type` values default to `soc`. No API calls, SSH commands, external lookups, or file writes are performed. This tool formats and summarizes data already passed into it.
+Accepts output from `investigate_security_incident`, `investigate_ssh_alert`, `investigate_command_execution`, or `correlate_security_events`. Unsupported `report_type` values default to `soc`. No API calls, SSH commands, external lookups, or file writes are performed. This tool formats and summarizes data already passed into it. Technical reports include `enriched_observables` when source IPs are available.
+
+---
+
+## Observable Enrichment
+
+### enrich_observable
+
+Purpose:
+
+Provide investigation context for common observables using deterministic local heuristics.
+
+Supported types:
+
+```text
+ip
+domain
+url
+hash
+email
+```
+
+Example workflow:
+
+```text
+Alert
+↓
+Investigation
+↓
+Observable Enrichment
+↓
+Correlation
+↓
+Incident Report
+```
+
+Outputs:
+
+- Observable summary
+- Reputation classification
+- Risk level
+- Related MITRE techniques (when applicable)
+- Investigation recommendations
+- Analyst notes
+
+Unsupported observable types return `{"status": "error"}`. No API calls, web requests, or external threat intelligence feeds are used. This tool is also referenced from `investigate_command_execution`, `correlate_security_events`, and technical `generate_incident_report` output when observables are available.
 
 ---
 
@@ -952,6 +1001,8 @@ Completed:
 
 ✅ AI-Assisted Incident Report Generation
 
+✅ Observable Enrichment & Threat Context
+
 ✅ Real system inventory and uptime collection from aihost
 
 ---
@@ -960,10 +1011,10 @@ Completed:
 
 Suggested future phases (SOC and detection engineering focus):
 
-- Threat intelligence enrichment for source IPs and observables
 - Splunk SPL query generation for hunt and detection workflows
 - Analyst decision review checklist
 - Report export to Markdown
+- Case management workflows
 
 ---
 
