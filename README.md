@@ -26,6 +26,8 @@ This project demonstrates:
 - AI-Assisted Attack Chain Analysis
 - Security Copilot-Style Investigation Chains
 - End-to-End Incident Investigation Orchestration
+- AI-Assisted Incident Report Generation
+- SOC and Executive Incident Reporting
 
 Key capabilities include:
 
@@ -36,6 +38,8 @@ Key capabilities include:
 - AI-Assisted Attack Chain Analysis
 - Security Copilot-Style Investigation Chains
 - End-to-End Incident Investigation Orchestration
+- AI-Assisted Incident Report Generation
+- SOC and Executive Incident Reporting
 - Investigation Summary Generation
 - AI-Assisted Investigation Runbook Generation
 - Security Ticket Generation
@@ -450,6 +454,47 @@ Outputs:
 - Analyst note
 
 No API calls, SSH commands, or external lookups are performed. This tool orchestrates other MCP tools only.
+
+---
+
+## Incident Reporting
+
+### generate_incident_report
+
+Purpose:
+
+Generate a structured SOC, executive, or technical incident report from investigation or correlation results.
+
+Supported report types:
+
+```text
+soc
+executive
+technical
+```
+
+Example workflow:
+
+```text
+investigate_security_incident
+↓
+generate_incident_report
+↓
+SOC / Executive / Technical Report
+```
+
+Outputs:
+
+- Executive Summary
+- Technical Summary
+- Incident Timeline
+- MITRE Mapping
+- Risk Assessment
+- Containment Recommendations
+- Detection Opportunities
+- Lessons Learned
+
+Accepts output from `investigate_security_incident`, `investigate_ssh_alert`, `investigate_command_execution`, or `correlate_security_events`. Unsupported `report_type` values default to `soc`. No API calls, SSH commands, external lookups, or file writes are performed. This tool formats and summarizes data already passed into it.
 
 ---
 
@@ -905,6 +950,8 @@ Completed:
 
 ✅ Security Copilot-Style Investigation Chains
 
+✅ AI-Assisted Incident Report Generation
+
 ✅ Real system inventory and uptime collection from aihost
 
 ---
@@ -915,8 +962,8 @@ Suggested future phases (SOC and detection engineering focus):
 
 - Threat intelligence enrichment for source IPs and observables
 - Splunk SPL query generation for hunt and detection workflows
-- Incident report generation
 - Analyst decision review checklist
+- Report export to Markdown
 
 ---
 
@@ -935,7 +982,7 @@ Real telemetry samples (for example `sample_data/aihost_*.log`) are listed in `.
 - Threat Intelligence Enrichment
 - IOC Reputation Lookups
 - Splunk SPL Query Generation
-- Incident Report Generation
+- Report Export to Markdown
 - Integration with Future AI Security Labs
 
 ---

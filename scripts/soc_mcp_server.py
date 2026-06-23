@@ -3316,6 +3316,594 @@ def investigate_security_incident(
     return _investigate_event_collection_incident(events)
 
 
+# --- Incident report generation (format-only, no API/SSH/file I/O) ---
+
+_SUPPORTED_REPORT_TYPES = {"soc", "executive", "technical"}
+
+
+def _coerce_list(value) -> list:
+    """Return a list from mixed input types; empty list when missing."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        return [value]
+    return []
+
+
+def _first_non_empty_str(*values: str) -> str:
+    """Return the first non-empty string from candidates."""
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _extract_incident_fields(incident_data: dict) -> dict:
+    """Normalize investigation or correlation output into report-friendly fields."""
+    investigation = incident_data.get("investigation_results") or {}
+    if not isinstance(investigation, dict):
+        investigation = {}
+
+    correlation = incident_data.get("correlation_results")
+    if not isinstance(correlation, dict):
+        if isinstance(incident_data.get("correlated_events"), list):
+            correlation = incident_data
+        else:
+            correlation = {}
+
+    risk_score = investigation.get("risk_score") or {}
+    if not isinstance(risk_score, dict):
+        risk_score = {}
+
+    investigation_summary = investigation.get("investigation_summary") or {}
+    if not isinstance(investigation_summary, dict):
+        investigation_summary = {}
+
+    alert_summary = investigation.get("alert_summary") or {}
+    if not isinstance(alert_summary, dict):
+        alert_summary = {}
+
+    alert_observables = alert_summary.get("observables") or {}
+    if not isinstance(alert_observables, dict):
+        alert_observables = {}
+
+    summary_observables = investigation_summary.get("observables") or {}
+    if not isinstance(summary_observables, dict):
+        summary_observables = {}
+
+    detection_recommendations = investigation.get("detection_recommendations") or {}
+    if not isinstance(detection_recommendations, dict):
+        detection_recommendations = {}
+
+    detection_package = incident_data.get("detection_package") or {}
+    if not isinstance(detection_package, dict):
+        detection_package = {}
+
+    runbook = incident_data.get("runbook")
+    if runbook is not None and not isinstance(runbook, (dict, str)):
+        runbook = None
+
+    incident_summary = _first_non_empty_str(
+        incident_data.get("incident_summary", ""),
+        correlation.get("correlation_summary", ""),
+        investigation.get("command_summary", ""),
+        investigation_summary.get("executive_summary", ""),
+    )
+
+    risk_level = _first_non_empty_str(
+        correlation.get("risk_level", ""),
+        investigation.get("severity", ""),
+        risk_score.get("severity", ""),
+    ) or "unknown"
+
+    confidence_score = (
+        correlation.get("confidence_score")
+        if correlation.get("confidence_score") is not None
+        else investigation.get("confidence_score")
+        if investigation.get("confidence_score") is not None
+        else risk_score.get("confidence_score")
+    )
+    if confidence_score is None:
+        confidence_score = 0
+
+    recommended_next_steps = _coerce_list(incident_data.get("recommended_next_steps"))
+    if not recommended_next_steps:
+        recommended_next_steps = _coerce_list(correlation.get("recommended_next_steps"))
+    if not recommended_next_steps:
+        recommended_next_steps = _coerce_list(investigation.get("recommended_actions"))
+    if not recommended_next_steps:
+        recommended_next_steps = _coerce_list(risk_score.get("recommended_next_steps"))
+
+    mitre_mapping = _coerce_list(correlation.get("mitre_mapping"))
+    if not mitre_mapping:
+        mitre_mapping = _coerce_list(investigation.get("mitre_mapping"))
+
+    detection_gaps = _coerce_list(correlation.get("detection_gaps"))
+    if not detection_gaps:
+        detection_gaps = _coerce_list(detection_recommendations.get("detection_gaps"))
+
+    detection_opportunities: list = []
+    engineering_summary = detection_package.get("engineering_summary")
+    if isinstance(engineering_summary, str) and engineering_summary.strip():
+        detection_opportunities.append(engineering_summary.strip())
+    detection_opportunities.extend(
+        _coerce_list(detection_recommendations.get("recommended_detections"))
+    )
+    if isinstance(runbook, dict):
+        if "detection_engineering_opportunities" in runbook:
+            detection_opportunities.extend(
+                _coerce_list(runbook.get("detection_engineering_opportunities"))
+            )
+        else:
+            for entry in runbook.values():
+                if isinstance(entry, dict):
+                    detection_opportunities.extend(
+                        _coerce_list(entry.get("detection_engineering_opportunities"))
+                    )
+
+    observables_dict = summary_observables or alert_observables
+    if not observables_dict and correlation.get("correlated_events"):
+        first_event = correlation["correlated_events"][0]
+        if isinstance(first_event, dict):
+            observables_dict = {
+                key: first_event.get(key, "")
+                for key in ("source_ip", "host", "username", "event_type", "description")
+                if first_event.get(key)
+            }
+
+    return {
+        "incident_summary": incident_summary,
+        "risk_level": risk_level,
+        "confidence_score": int(confidence_score),
+        "recommended_next_steps": recommended_next_steps,
+        "correlation_results": correlation,
+        "correlation_summary": correlation.get("correlation_summary", ""),
+        "attack_timeline": _coerce_list(correlation.get("attack_timeline")),
+        "possible_attack_chain": _coerce_list(correlation.get("possible_attack_chain")),
+        "mitre_mapping": mitre_mapping,
+        "observables_dict": observables_dict if isinstance(observables_dict, dict) else {},
+        "detection_gaps": detection_gaps,
+        "detection_opportunities": detection_opportunities,
+        "runbook": runbook,
+        "ticket_note": incident_data.get("ticket_note"),
+        "workflow_used": _coerce_list(incident_data.get("workflow_used")),
+        "input_type": incident_data.get("input_type", ""),
+        "escalation_recommendation": correlation.get("escalation_recommendation", ""),
+    }
+
+
+def _extract_affected_assets(extracted: dict) -> list[dict]:
+    """Collect hosts, users, and source IPs from timeline and correlated events."""
+    assets: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_asset(asset_type: str, value: str) -> None:
+        cleaned = (value or "").strip()
+        if not cleaned or cleaned == "unknown":
+            return
+        key = (asset_type, cleaned)
+        if key in seen:
+            return
+        seen.add(key)
+        assets.append({"type": asset_type, "value": cleaned})
+
+    for step in extracted.get("attack_timeline", []):
+        if not isinstance(step, dict):
+            continue
+        add_asset("host", step.get("host", ""))
+        add_asset("username", step.get("username", ""))
+        add_asset("source_ip", step.get("source_ip", ""))
+
+    correlation = extracted.get("correlation_results") or {}
+    for event in _coerce_list(correlation.get("correlated_events")):
+        if not isinstance(event, dict):
+            continue
+        add_asset("host", event.get("host", ""))
+        add_asset("username", event.get("username", ""))
+        add_asset("source_ip", event.get("source_ip", ""))
+
+    for key, label in (
+        ("host", "host"),
+        ("target_user", "username"),
+        ("username", "username"),
+        ("source_ip", "source_ip"),
+    ):
+        add_asset(label, extracted.get("observables_dict", {}).get(key, ""))
+
+    return assets
+
+
+def _extract_observables_list(extracted: dict) -> list[dict]:
+    """Flatten observables into a list of type/value pairs."""
+    observables: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_observable(obs_type: str, value: str) -> None:
+        cleaned = (value or "").strip()
+        if not cleaned or cleaned == "unknown":
+            return
+        key = (obs_type, cleaned)
+        if key in seen:
+            return
+        seen.add(key)
+        observables.append({"type": obs_type, "value": cleaned})
+
+    for key, obs_type in (
+        ("source_ip", "source_ip"),
+        ("target_user", "username"),
+        ("username", "username"),
+        ("host", "host"),
+        ("rule_id", "rule_id"),
+        ("rule_description", "rule_description"),
+        ("event_type", "event_type"),
+        ("description", "description"),
+    ):
+        add_observable(obs_type, extracted.get("observables_dict", {}).get(key, ""))
+
+    for step in extracted.get("attack_timeline", []):
+        if not isinstance(step, dict):
+            continue
+        add_observable("event_type", step.get("event_type", ""))
+        add_observable("source_ip", step.get("source_ip", ""))
+        add_observable("host", step.get("host", ""))
+        add_observable("username", step.get("username", ""))
+
+    return observables
+
+
+def _risk_assessment_dict(extracted: dict, escalation_needed: bool) -> dict:
+    """Build a shared risk assessment block for all report types."""
+    risk_level = extracted.get("risk_level", "unknown")
+    confidence_score = extracted.get("confidence_score", 0)
+    summary_parts = [
+        f"Risk level: {risk_level}.",
+        f"Confidence score: {confidence_score}/100.",
+    ]
+    if extracted.get("possible_attack_chain"):
+        chain_text = " → ".join(extracted["possible_attack_chain"])
+        summary_parts.append(f"Possible attack chain: {chain_text}.")
+    elif extracted.get("incident_summary"):
+        summary_parts.append(extracted["incident_summary"])
+    else:
+        summary_parts.append("Limited incident context was available for assessment.")
+
+    escalation_text = extracted.get("escalation_recommendation", "")
+    if escalation_text:
+        summary_parts.append(escalation_text)
+
+    return {
+        "risk_level": risk_level,
+        "confidence_score": confidence_score,
+        "escalation_needed": escalation_needed,
+        "summary": " ".join(summary_parts),
+    }
+
+
+def _default_lessons_learned(extracted: dict) -> list[str]:
+    """Return baseline lessons learned when no attack chain is present."""
+    if extracted.get("possible_attack_chain"):
+        return [
+            (
+                "Correlate authentication failures, successful logins, and command "
+                "execution from the same source to detect multi-stage intrusions earlier."
+            ),
+            (
+                "Document the attack chain stages and MITRE mappings in the ticket "
+                "to improve future detection engineering."
+            ),
+        ]
+    return [
+        "Maintain consistent event normalization so correlation rules can link related activity.",
+        "Review detection coverage for the observed alert types after closure.",
+    ]
+
+
+def _report_title(report_type: str, extracted: dict) -> str:
+    """Generate a short title for the incident report."""
+    risk_level = extracted.get("risk_level", "unknown").upper()
+    if report_type == "executive":
+        return f"Executive Security Incident Brief — {risk_level} Risk"
+    if report_type == "technical":
+        return f"Technical Incident Report — {risk_level} Severity"
+    return f"SOC Incident Report — {risk_level} Severity"
+
+
+def _build_soc_report_sections(extracted: dict) -> dict:
+    """Build balanced SOC analyst report content."""
+    risk_level = extracted.get("risk_level", "unknown")
+    confidence_score = extracted.get("confidence_score", 0)
+    escalation_needed = risk_level == "high" or confidence_score >= 70
+
+    executive_parts = []
+    if extracted.get("incident_summary"):
+        executive_parts.append(extracted["incident_summary"])
+    else:
+        executive_parts.append(
+            "A security incident was reviewed using available investigation outputs."
+        )
+    executive_parts.append(
+        f"The case is assessed at {risk_level} risk with confidence {confidence_score}/100."
+    )
+    if escalation_needed:
+        executive_parts.append(
+            "Escalation to senior analysts or incident response is recommended."
+        )
+    else:
+        executive_parts.append(
+            "Continue structured investigation and monitoring before escalation."
+        )
+
+    technical_parts = []
+    if extracted.get("possible_attack_chain"):
+        chain_text = " → ".join(extracted["possible_attack_chain"])
+        technical_parts.append(f"Observed attack chain stages: {chain_text}.")
+    if extracted.get("attack_timeline"):
+        technical_parts.append(
+            f"Timeline contains {len(extracted['attack_timeline'])} ordered event(s)."
+        )
+    observables = _extract_observables_list(extracted)
+    if observables:
+        observable_text = ", ".join(
+            f"{item['type']}={item['value']}" for item in observables[:6]
+        )
+        technical_parts.append(f"Key observables: {observable_text}.")
+    if not technical_parts:
+        technical_parts.append(
+            "No detailed timeline or observables were supplied in the incident data."
+        )
+
+    detection_opportunities = list(extracted.get("detection_gaps", []))
+    detection_opportunities.extend(extracted.get("detection_opportunities", []))
+
+    return {
+        "report_title": _report_title("soc", extracted),
+        "executive_summary": " ".join(executive_parts),
+        "technical_summary": " ".join(technical_parts),
+        "incident_timeline": extracted.get("attack_timeline", []),
+        "affected_assets": _extract_affected_assets(extracted),
+        "observables": observables,
+        "mitre_mapping": extracted.get("mitre_mapping", []),
+        "risk_assessment": _risk_assessment_dict(extracted, escalation_needed),
+        "containment_recommendations": extracted.get("recommended_next_steps", [])[:8],
+        "detection_opportunities": detection_opportunities[:8],
+        "lessons_learned": _default_lessons_learned(extracted),
+        "analyst_notes": (
+            "SOC incident report generated from supplied investigation data only. "
+            "No API calls, SSH commands, external lookups, or file writes were performed."
+        ),
+    }
+
+
+def _build_executive_report_sections(extracted: dict) -> dict:
+    """Build a short, non-technical executive incident brief."""
+    risk_level = extracted.get("risk_level", "unknown")
+    confidence_score = extracted.get("confidence_score", 0)
+    escalation_needed = risk_level == "high" or confidence_score >= 70
+
+    if extracted.get("possible_attack_chain"):
+        chain_text = " → ".join(extracted["possible_attack_chain"])
+        impact_summary = (
+            f"Security activity suggests a multi-stage incident involving {chain_text}. "
+            "This may indicate unauthorized access followed by follow-on actions on affected systems."
+        )
+    elif extracted.get("incident_summary"):
+        impact_summary = extracted["incident_summary"]
+    else:
+        impact_summary = (
+            "A security event was reviewed. Additional context is needed to confirm business impact."
+        )
+
+    executive_summary = (
+        f"{impact_summary} Overall risk is {risk_level} with analyst confidence "
+        f"{confidence_score}/100. "
+    )
+    if escalation_needed:
+        executive_summary += (
+            "Leadership should be notified and incident response coordination is advised."
+        )
+    else:
+        executive_summary += (
+            "The security team should continue monitoring while validating scope and impact."
+        )
+
+    if extracted.get("possible_attack_chain"):
+        technical_summary = (
+            f"Activity progressed through: {' → '.join(extracted['possible_attack_chain'])}."
+        )
+    else:
+        technical_summary = (
+            "Detailed technical indicators were not included in this executive brief."
+        )
+
+    high_level_actions = []
+    for step in extracted.get("recommended_next_steps", [])[:4]:
+        lowered = step.lower()
+        if any(
+            term in lowered
+            for term in (
+                "generate_",
+                "kql",
+                "opensearch",
+                "wazuh",
+                "defender",
+                "sentinel",
+                "qradar",
+                "aql",
+            )
+        ):
+            high_level_actions.append(
+                "Coordinate with the security team to validate scope and contain affected assets."
+            )
+        else:
+            high_level_actions.append(step)
+    if not high_level_actions:
+        high_level_actions = [
+            "Validate whether business-critical systems are affected.",
+            "Confirm containment options with the security operations team.",
+        ]
+
+    detection_opportunities = []
+    if extracted.get("detection_gaps"):
+        detection_opportunities.append(
+            "Detection coverage should be reviewed to reduce blind spots for similar activity."
+        )
+
+    return {
+        "report_title": _report_title("executive", extracted),
+        "executive_summary": executive_summary,
+        "technical_summary": technical_summary,
+        "incident_timeline": extracted.get("attack_timeline", []),
+        "affected_assets": _extract_affected_assets(extracted),
+        "observables": _extract_observables_list(extracted)[:5],
+        "mitre_mapping": extracted.get("mitre_mapping", []),
+        "risk_assessment": _risk_assessment_dict(extracted, escalation_needed),
+        "containment_recommendations": high_level_actions,
+        "detection_opportunities": detection_opportunities,
+        "lessons_learned": [
+            "Early cross-team communication reduces business disruption during security incidents."
+        ],
+        "analyst_notes": (
+            "Executive incident brief generated from supplied investigation data only. "
+            "Technical tool outputs and query details were intentionally omitted."
+        ),
+    }
+
+
+def _build_technical_report_sections(extracted: dict) -> dict:
+    """Build a detailed technical incident report for analysts and detection engineers."""
+    risk_level = extracted.get("risk_level", "unknown")
+    confidence_score = extracted.get("confidence_score", 0)
+    escalation_needed = risk_level == "high" or confidence_score >= 70
+
+    technical_parts = []
+    if extracted.get("correlation_summary"):
+        technical_parts.append(f"Correlation findings: {extracted['correlation_summary']}")
+    if extracted.get("workflow_used"):
+        workflow_text = " → ".join(extracted["workflow_used"])
+        technical_parts.append(f"Workflow used: {workflow_text}.")
+    if extracted.get("possible_attack_chain"):
+        technical_parts.append(
+            f"Attack chain: {' → '.join(extracted['possible_attack_chain'])}."
+        )
+    if extracted.get("attack_timeline"):
+        technical_parts.append(
+            f"Attack timeline includes {len(extracted['attack_timeline'])} step(s)."
+        )
+
+    runbook = extracted.get("runbook")
+    if isinstance(runbook, dict):
+        if runbook.get("investigation_steps"):
+            technical_parts.append(
+                f"Primary runbook defines {len(_coerce_list(runbook['investigation_steps']))} investigation step(s)."
+            )
+        else:
+            runbook_step_count = sum(
+                len(_coerce_list(entry.get("investigation_steps")))
+                for entry in runbook.values()
+                if isinstance(entry, dict)
+            )
+            if runbook_step_count:
+                technical_parts.append(
+                    f"Correlated runbooks define {runbook_step_count} investigation step(s)."
+                )
+
+    ticket_note = extracted.get("ticket_note")
+    if isinstance(ticket_note, str) and ticket_note.strip():
+        technical_parts.append("Ticket note content is available for analyst documentation.")
+    elif isinstance(ticket_note, dict) and ticket_note:
+        technical_parts.append("Structured ticket note metadata is available for export.")
+
+    if not technical_parts:
+        technical_parts.append(
+            "Technical incident context was limited; provide investigation or correlation output for richer detail."
+        )
+
+    detection_opportunities = list(extracted.get("detection_gaps", []))
+    detection_opportunities.extend(extracted.get("detection_opportunities", []))
+
+    executive_summary = (
+        f"Technical review of a {risk_level} severity incident with confidence "
+        f"{confidence_score}/100. "
+    )
+    if extracted.get("incident_summary"):
+        executive_summary += extracted["incident_summary"]
+    else:
+        executive_summary += "Investigation outputs were formatted into a technical incident report."
+
+    return {
+        "report_title": _report_title("technical", extracted),
+        "executive_summary": executive_summary,
+        "technical_summary": " ".join(technical_parts),
+        "incident_timeline": extracted.get("attack_timeline", []),
+        "affected_assets": _extract_affected_assets(extracted),
+        "observables": _extract_observables_list(extracted),
+        "mitre_mapping": extracted.get("mitre_mapping", []),
+        "risk_assessment": _risk_assessment_dict(extracted, escalation_needed),
+        "containment_recommendations": extracted.get("recommended_next_steps", []),
+        "detection_opportunities": detection_opportunities,
+        "lessons_learned": _default_lessons_learned(extracted),
+        "analyst_notes": (
+            "Technical incident report generated from supplied investigation data only. "
+            "No API calls, SSH commands, external lookups, or file writes were performed."
+        ),
+    }
+
+
+def _assemble_incident_report(extracted: dict, report_type: str) -> dict:
+    """Select a report builder and return the final structured report dict."""
+    if report_type == "executive":
+        sections = _build_executive_report_sections(extracted)
+    elif report_type == "technical":
+        sections = _build_technical_report_sections(extracted)
+    else:
+        sections = _build_soc_report_sections(extracted)
+
+    return {
+        "status": "ok",
+        "report_type": report_type,
+        **sections,
+    }
+
+
+@mcp.tool()
+def generate_incident_report(
+    incident_data: dict,
+    report_type: str = "soc",
+) -> str:
+    """
+    Generate a structured SOC, executive, or technical incident report from
+    investigation or correlation results. Accepts output from
+    investigate_security_incident, investigate_ssh_alert,
+    investigate_command_execution, or correlate_security_events.
+
+    report_type values:
+    - soc: balanced analyst report with timeline, observables, and next steps
+    - executive: short business-impact summary without low-level tool details
+    - technical: detailed report for analysts and detection engineers
+
+    Unsupported report_type values default to soc. No API calls, SSH commands,
+    external lookups, or file writes are performed.
+    """
+    if not isinstance(incident_data, dict):
+        return json.dumps(
+            {
+                "status": "error",
+                "analyst_notes": "incident_data must be a dictionary of investigation results.",
+            },
+            indent=2,
+        )
+
+    normalized_type = (report_type or "soc").strip().lower()
+    if normalized_type not in _SUPPORTED_REPORT_TYPES:
+        normalized_type = "soc"
+
+    extracted = _extract_incident_fields(incident_data)
+    result = _assemble_incident_report(extracted, normalized_type)
+    return json.dumps(result, indent=2)
+
+
 # --- Remote host inventory (read-only SSH) ---
 
 _INVENTORY_SEP = "---SEP---"

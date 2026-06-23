@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from soc_mcp_server import (  # noqa: E402
     correlate_security_events,
     generate_detection_package,
+    generate_incident_report,
     generate_investigation_runbook,
     generate_qradar_aql_detection,
     investigate_command_execution,
@@ -507,6 +508,128 @@ def test_investigate_security_incident_event_collection_chain() -> None:
     assert "suspicious_command_execution" in result["runbook"]
 
 
+INCIDENT_REPORT_REQUIRED_KEYS = [
+    "status",
+    "report_type",
+    "report_title",
+    "executive_summary",
+    "technical_summary",
+    "incident_timeline",
+    "affected_assets",
+    "observables",
+    "mitre_mapping",
+    "risk_assessment",
+    "containment_recommendations",
+    "detection_opportunities",
+    "lessons_learned",
+    "analyst_notes",
+]
+
+
+def _correlated_incident_fixture() -> dict:
+    """Build a realistic incident package from correlated event collection."""
+    return json.loads(
+        investigate_security_incident(
+            input_type="event_collection",
+            events=[SSH_EVENT, AUTH_EVENT, CMD_EVENT],
+        )
+    )
+
+
+def _assert_incident_report_shape(result: dict) -> None:
+    for key in INCIDENT_REPORT_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+
+def test_generate_incident_report_soc_from_correlated_incident() -> None:
+    """generate_incident_report should produce a SOC report from correlated incident data."""
+    incident = _correlated_incident_fixture()
+    result = json.loads(
+        generate_incident_report(incident_data=incident, report_type="soc")
+    )
+
+    _assert_incident_report_shape(result)
+    assert result["status"] == "ok"
+    assert result["report_type"] == "soc"
+    assert result["executive_summary"]
+    assert result["incident_timeline"]
+    assert len(result["incident_timeline"]) >= 1
+
+    technique_ids = [entry["technique_id"] for entry in result["mitre_mapping"]]
+    assert technique_ids == ["T1110", "T1078", "T1059"]
+    assert result["risk_assessment"]["risk_level"] == "high"
+    assert result["containment_recommendations"]
+
+
+def test_generate_incident_report_executive_from_correlated_incident() -> None:
+    """generate_incident_report should produce a non-technical executive brief."""
+    incident = _correlated_incident_fixture()
+    result = json.loads(
+        generate_incident_report(incident_data=incident, report_type="executive")
+    )
+
+    _assert_incident_report_shape(result)
+    assert result["status"] == "ok"
+    assert result["report_type"] == "executive"
+    assert result["executive_summary"]
+
+    technical_result = json.loads(
+        generate_incident_report(incident_data=incident, report_type="technical")
+    )
+    assert len(result["executive_summary"]) <= len(technical_result["executive_summary"])
+
+    combined_text = " ".join(
+        [
+            result["executive_summary"],
+            result["technical_summary"],
+            " ".join(result["containment_recommendations"]),
+        ]
+    ).lower()
+    assert "generate_wazuh_query" not in combined_text
+    assert "opensearch_query" not in combined_text
+
+
+def test_generate_incident_report_technical_from_correlated_incident() -> None:
+    """generate_incident_report should produce a detailed technical report."""
+    incident = _correlated_incident_fixture()
+    result = json.loads(
+        generate_incident_report(incident_data=incident, report_type="technical")
+    )
+
+    _assert_incident_report_shape(result)
+    assert result["status"] == "ok"
+    assert result["report_type"] == "technical"
+    assert "Attack chain" in result["technical_summary"] or "attack chain" in result["technical_summary"].lower()
+    assert result["risk_assessment"]
+    assert result["detection_opportunities"] or result["mitre_mapping"]
+
+
+def test_generate_incident_report_unsupported_type_defaults_to_soc() -> None:
+    """generate_incident_report should default unsupported report types to soc."""
+    incident = _correlated_incident_fixture()
+    result = json.loads(
+        generate_incident_report(incident_data=incident, report_type="briefing")
+    )
+
+    assert result["status"] == "ok"
+    assert result["report_type"] == "soc"
+
+
+def test_generate_incident_report_missing_fields_graceful() -> None:
+    """generate_incident_report should handle missing fields gracefully."""
+    result = json.loads(generate_incident_report(incident_data={}, report_type="soc"))
+
+    _assert_incident_report_shape(result)
+    assert result["status"] == "ok"
+    assert result["incident_timeline"] == []
+    assert result["affected_assets"] == []
+    assert result["observables"] == []
+    assert result["mitre_mapping"] == []
+    assert isinstance(result["risk_assessment"], dict)
+    assert result["executive_summary"]
+    assert result["technical_summary"]
+
+
 def test_generate_detection_package_includes_qradar() -> None:
     """generate_detection_package should include qradar_aql_detection."""
     result_raw = generate_detection_package(
@@ -590,6 +713,21 @@ def main() -> None:
 
     test_investigate_security_incident_event_collection_chain()
     print("PASS: investigate_security_incident event collection chain")
+
+    test_generate_incident_report_soc_from_correlated_incident()
+    print("PASS: generate_incident_report soc from correlated incident")
+
+    test_generate_incident_report_executive_from_correlated_incident()
+    print("PASS: generate_incident_report executive from correlated incident")
+
+    test_generate_incident_report_technical_from_correlated_incident()
+    print("PASS: generate_incident_report technical from correlated incident")
+
+    test_generate_incident_report_unsupported_type_defaults_to_soc()
+    print("PASS: generate_incident_report unsupported type defaults to soc")
+
+    test_generate_incident_report_missing_fields_graceful()
+    print("PASS: generate_incident_report missing fields graceful")
 
     print("\nAll SOC MCP server checks passed.")
 
