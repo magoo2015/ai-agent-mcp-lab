@@ -4573,6 +4573,859 @@ def generate_incident_report(
     return json.dumps(result, indent=2)
 
 
+# --- Analyst decision review (read-only QC, no API/SSH/file I/O) ---
+
+_REVIEW_PLACEHOLDER_SUMMARIES = (
+    "a security incident was reviewed using available investigation outputs",
+    "limited incident context was available",
+)
+
+
+def _normalize_review_input(incident_data: dict) -> dict:
+    """Wrap standalone investigation or correlation outputs for field extraction."""
+    normalized = dict(incident_data)
+    if not normalized.get("investigation_results"):
+        investigation_keys = (
+            "alert_summary",
+            "risk_score",
+            "investigation_summary",
+            "detection_recommendations",
+            "investigation_runbook",
+            "command_summary",
+            "severity",
+            "confidence_score",
+            "mitre_mapping",
+            "recommended_actions",
+            "suspicious_indicators",
+        )
+        if any(key in normalized for key in investigation_keys):
+            normalized["investigation_results"] = {
+                key: normalized[key] for key in investigation_keys if key in normalized
+            }
+    return normalized
+
+
+def _merge_flat_review_observables(
+    incident_data: dict, observables_dict: dict
+) -> dict:
+    """Merge flat top-level and observables-dict fields into observables_dict."""
+    merged = dict(observables_dict)
+
+    def add_observable(key: str, value: object) -> None:
+        if not isinstance(value, str):
+            return
+        cleaned = value.strip()
+        if not cleaned or cleaned == "unknown":
+            return
+        if key == "user":
+            merged.setdefault("username", cleaned)
+            merged.setdefault("target_user", cleaned)
+        else:
+            merged.setdefault(key, cleaned)
+
+    for key in ("source_ip", "host", "username", "user"):
+        add_observable(key, incident_data.get(key, ""))
+
+    top_observables = incident_data.get("observables")
+    if isinstance(top_observables, dict):
+        for key in ("source_ip", "host", "username", "user"):
+            add_observable(key, top_observables.get(key, ""))
+
+    return merged
+
+
+def _merge_flat_review_fields(incident_data: dict, extracted: dict) -> None:
+    """Supplement extracted review fields from simple flat incident dictionaries."""
+    if extracted.get("risk_level", "unknown") == "unknown":
+        flat_risk = _first_non_empty_str(
+            incident_data.get("risk_level", ""),
+            incident_data.get("severity", ""),
+        )
+        if flat_risk:
+            extracted["risk_level"] = flat_risk
+
+    if int(extracted.get("confidence_score", 0)) == 0:
+        if incident_data.get("confidence_score") is not None:
+            extracted["confidence_score"] = int(incident_data["confidence_score"])
+
+    extracted["observables_dict"] = _merge_flat_review_observables(
+        incident_data, extracted.get("observables_dict") or {}
+    )
+
+
+def _extract_review_fields(incident_data: dict) -> dict:
+    """Normalize investigation, correlation, or report output for decision review."""
+    normalized = _normalize_review_input(incident_data)
+    extracted = _extract_incident_fields(normalized)
+
+    risk_assessment = incident_data.get("risk_assessment")
+    if isinstance(risk_assessment, dict):
+        extracted["risk_level"] = _first_non_empty_str(
+            risk_assessment.get("risk_level", ""),
+            extracted.get("risk_level", ""),
+        ) or "unknown"
+        if risk_assessment.get("confidence_score") is not None:
+            extracted["confidence_score"] = int(risk_assessment["confidence_score"])
+
+    extracted["incident_summary"] = _first_non_empty_str(
+        incident_data.get("executive_summary", ""),
+        incident_data.get("technical_summary", ""),
+        extracted.get("incident_summary", ""),
+    )
+
+    report_timeline = _coerce_list(incident_data.get("incident_timeline"))
+    if report_timeline:
+        extracted["attack_timeline"] = report_timeline
+
+    report_observables = incident_data.get("observables")
+    if isinstance(report_observables, list) and report_observables:
+        observables_dict = dict(extracted.get("observables_dict") or {})
+        for item in report_observables:
+            if not isinstance(item, dict):
+                continue
+            obs_type = item.get("type", "")
+            value = item.get("value", "")
+            if obs_type and value:
+                observables_dict[obs_type] = value
+                if obs_type == "username":
+                    observables_dict["target_user"] = value
+        extracted["observables_dict"] = observables_dict
+    elif isinstance(report_observables, dict) and report_observables:
+        extracted["observables_dict"] = _merge_flat_review_observables(
+            incident_data, extracted.get("observables_dict") or {}
+        )
+
+    containment_recommendations = _coerce_list(
+        incident_data.get("containment_recommendations")
+    )
+    if not containment_recommendations:
+        runbook = extracted.get("runbook")
+        if isinstance(runbook, dict):
+            containment_recommendations = _coerce_list(
+                runbook.get("containment_considerations")
+            )
+            if not containment_recommendations:
+                inv_runbook = (
+                    normalized.get("investigation_results") or {}
+                ).get("investigation_runbook")
+                if isinstance(inv_runbook, dict):
+                    containment_recommendations = _coerce_list(
+                        inv_runbook.get("containment_considerations")
+                    )
+    extracted["containment_recommendations"] = containment_recommendations
+
+    report_detection_opportunities = _coerce_list(
+        incident_data.get("detection_opportunities")
+    )
+    if report_detection_opportunities:
+        existing = list(extracted.get("detection_opportunities") or [])
+        existing.extend(report_detection_opportunities)
+        extracted["detection_opportunities"] = existing
+
+    report_mitre = _coerce_list(incident_data.get("mitre_mapping"))
+    if report_mitre:
+        extracted["mitre_mapping"] = report_mitre
+
+    if not extracted.get("ticket_note"):
+        extracted["ticket_note"] = _first_non_empty_str(
+            incident_data.get("analyst_notes", ""),
+            incident_data.get("ticket_note", ""),
+        )
+
+    alert_classification = incident_data.get("alert_classification")
+    if isinstance(alert_classification, dict):
+        extracted["alert_type"] = alert_classification.get("alert_type", "")
+
+    if not extracted.get("alert_type"):
+        runbook = extracted.get("runbook")
+        if isinstance(runbook, dict) and runbook.get("alert_type"):
+            extracted["alert_type"] = runbook["alert_type"]
+        else:
+            inv_runbook = (normalized.get("investigation_results") or {}).get(
+                "investigation_runbook"
+            )
+            if isinstance(inv_runbook, dict):
+                extracted["alert_type"] = inv_runbook.get("alert_type", "")
+
+    if not extracted.get("alert_type"):
+        correlation = extracted.get("correlation_results") or {}
+        events = _coerce_list(correlation.get("correlated_events"))
+        if events and isinstance(events[0], dict):
+            extracted["alert_type"] = events[0].get("event_type", "")
+
+    extracted["has_report_documentation"] = bool(
+        extracted.get("ticket_note")
+        or incident_data.get("executive_summary")
+        or incident_data.get("report_title")
+    )
+
+    _merge_flat_review_fields(incident_data, extracted)
+
+    return extracted
+
+
+def _review_observable_value(extracted: dict, key: str) -> str:
+    """Return a cleaned observable value from extracted review fields."""
+    observables = extracted.get("observables_dict") or {}
+    aliases = {
+        "source_ip": ("source_ip",),
+        "host": ("host",),
+        "username": ("username", "target_user", "user"),
+    }
+    for alias in aliases.get(key, (key,)):
+        value = observables.get(alias, "")
+        if isinstance(value, str) and value.strip() and value.strip() != "unknown":
+            return value.strip()
+    return ""
+
+
+def _review_text_mentions(items: list, keywords: tuple[str, ...]) -> bool:
+    """Return True when any list item contains one of the keywords."""
+    combined = " ".join(str(item) for item in items).lower()
+    return any(keyword in combined for keyword in keywords)
+
+
+def _escalation_actively_recommended(items: list) -> bool:
+    """Return True when text actively recommends escalation, not deferral."""
+    combined = " ".join(str(item) for item in items).lower()
+    for deferral in (
+        "before escalation",
+        "before escalating",
+        "without escalation",
+        "continue investigation before escalation",
+    ):
+        combined = combined.replace(deferral, "")
+    if any(
+        phrase in combined
+        for phrase in (
+            "escalate promptly",
+            "escalate to",
+            "escalation is recommended",
+            "escalate per",
+            "begin containment review",
+            "escalate and",
+            "senior analyst",
+            "incident response",
+        )
+    ):
+        return True
+    return any(str(item).lower().strip().startswith("escalate") for item in items)
+
+
+def _review_has_containment_context(extracted: dict) -> bool:
+    """Return True when containment recommendations or guidance are present."""
+    if extracted.get("containment_recommendations"):
+        return True
+    if _review_text_mentions(
+        [extracted.get("escalation_recommendation", "")],
+        ("contain", "isolation", "block"),
+    ):
+        return True
+    return _review_text_mentions(
+        extracted.get("recommended_next_steps", []),
+        ("contain", "isolation", "block"),
+    )
+
+
+def _compute_investigation_completeness(extracted: dict) -> dict:
+    """Score how complete the investigation evidence is for analyst review."""
+    checks = [
+        ("incident summary", bool(extracted.get("incident_summary"))),
+        ("risk level", extracted.get("risk_level", "unknown") != "unknown"),
+        ("confidence score", int(extracted.get("confidence_score", 0)) > 0),
+        ("timeline", bool(extracted.get("attack_timeline"))),
+        ("observables", bool(_extract_observables_list(extracted))),
+        ("host", bool(_review_observable_value(extracted, "host"))),
+        ("user/account", bool(_review_observable_value(extracted, "username"))),
+        ("source IP", bool(_review_observable_value(extracted, "source_ip"))),
+        ("MITRE mapping", bool(extracted.get("mitre_mapping"))),
+        ("recommended next steps", bool(extracted.get("recommended_next_steps"))),
+        (
+            "detection context",
+            bool(extracted.get("detection_gaps"))
+            or bool(extracted.get("detection_opportunities")),
+        ),
+        ("ticket or report documentation", bool(extracted.get("has_report_documentation"))),
+    ]
+    fields_total = len(checks)
+    fields_present = sum(1 for _, present in checks if present)
+    score = round((fields_present / fields_total) * 100) if fields_total else 0
+    missing_labels = [label for label, present in checks if not present]
+    if not missing_labels:
+        summary = "Investigation evidence appears complete for analyst decision review."
+    elif len(missing_labels) <= 3:
+        summary = (
+            "Investigation is mostly complete but missing: "
+            + ", ".join(missing_labels)
+            + "."
+        )
+    else:
+        summary = (
+            "Investigation has significant gaps. Missing areas include: "
+            + ", ".join(missing_labels[:5])
+            + "."
+        )
+    return {
+        "score": score,
+        "fields_present": fields_present,
+        "fields_total": fields_total,
+        "summary": summary,
+    }
+
+
+def _build_analyst_checklist(extracted: dict) -> list[dict]:
+    """Build analyst checklist items with complete, missing, or needs_review status."""
+    summary = extracted.get("incident_summary", "")
+    summary_lower = summary.lower()
+    is_placeholder = any(
+        phrase in summary_lower for phrase in _REVIEW_PLACEHOLDER_SUMMARIES
+    )
+
+    def checklist_item(item: str, status: str, detail: str) -> dict:
+        return {"item": item, "status": status, "detail": detail}
+
+    items: list[dict] = []
+
+    if summary and not is_placeholder:
+        items.append(
+            checklist_item(
+                "Incident summary reviewed",
+                "complete",
+                summary[:160] + ("..." if len(summary) > 160 else ""),
+            )
+        )
+    elif summary and is_placeholder:
+        items.append(
+            checklist_item(
+                "Incident summary reviewed",
+                "needs_review",
+                "A generic summary was found; confirm it reflects the actual case.",
+            )
+        )
+    else:
+        items.append(
+            checklist_item(
+                "Incident summary reviewed",
+                "missing",
+                "No incident summary was found in the investigation data.",
+            )
+        )
+
+    timeline = extracted.get("attack_timeline") or []
+    if timeline:
+        items.append(
+            checklist_item(
+                "Timeline reviewed",
+                "complete",
+                f"Timeline contains {len(timeline)} ordered event(s).",
+            )
+        )
+    else:
+        items.append(
+            checklist_item(
+                "Timeline reviewed",
+                "missing",
+                "No attack timeline or incident timeline was found.",
+            )
+        )
+
+    for label, key in (
+        ("Source IP identified", "source_ip"),
+        ("Host identified", "host"),
+        ("User/account identified", "username"),
+    ):
+        value = _review_observable_value(extracted, key)
+        observables = extracted.get("observables_dict") or {}
+        raw = observables.get(key) or observables.get("target_user", "")
+        if value:
+            detail_prefix = {
+                "source_ip": "Source IP",
+                "host": "Host",
+                "username": "User/account",
+            }[key]
+            items.append(
+                checklist_item(
+                    label,
+                    "complete",
+                    f"{detail_prefix} {value} was found in observables.",
+                )
+            )
+        elif isinstance(raw, str) and raw.strip() == "unknown":
+            items.append(
+                checklist_item(
+                    label,
+                    "needs_review",
+                    f"{label.replace(' identified', '')} is marked unknown and needs validation.",
+                )
+            )
+        else:
+            items.append(
+                checklist_item(
+                    label,
+                    "missing",
+                    f"No {label.replace(' identified', '').lower()} was found in the investigation data.",
+                )
+            )
+
+    mitre_mapping = extracted.get("mitre_mapping") or []
+    if mitre_mapping:
+        technique_ids = [
+            entry.get("technique_id", "")
+            for entry in mitre_mapping
+            if isinstance(entry, dict)
+        ]
+        items.append(
+            checklist_item(
+                "MITRE mapping reviewed",
+                "complete",
+                f"MITRE techniques mapped: {', '.join(t for t in technique_ids if t) or 'present'}.",
+            )
+        )
+    else:
+        items.append(
+            checklist_item(
+                "MITRE mapping reviewed",
+                "missing",
+                "No MITRE ATT&CK mapping was found.",
+            )
+        )
+
+    risk_level = extracted.get("risk_level", "unknown")
+    if risk_level != "unknown":
+        items.append(
+            checklist_item(
+                "Risk/severity reviewed",
+                "complete",
+                f"Risk level assessed as {risk_level}.",
+            )
+        )
+    else:
+        items.append(
+            checklist_item(
+                "Risk/severity reviewed",
+                "missing",
+                "No risk level or severity was found.",
+            )
+        )
+
+    confidence_score = int(extracted.get("confidence_score", 0))
+    if confidence_score > 0:
+        items.append(
+            checklist_item(
+                "Confidence score reviewed",
+                "complete",
+                f"Confidence score is {confidence_score}/100.",
+            )
+        )
+    else:
+        items.append(
+            checklist_item(
+                "Confidence score reviewed",
+                "missing",
+                "No confidence score was found.",
+            )
+        )
+
+    next_steps = extracted.get("recommended_next_steps") or []
+    if next_steps:
+        items.append(
+            checklist_item(
+                "Recommended next steps reviewed",
+                "complete",
+                f"{len(next_steps)} recommended next step(s) documented.",
+            )
+        )
+    else:
+        items.append(
+            checklist_item(
+                "Recommended next steps reviewed",
+                "missing",
+                "No recommended next steps were found.",
+            )
+        )
+
+    if _review_has_containment_context(extracted):
+        items.append(
+            checklist_item(
+                "Containment options reviewed",
+                "complete",
+                "Containment recommendations or guidance are documented.",
+            )
+        )
+    elif _escalation_actively_recommended(
+        extracted.get("recommended_next_steps", [])
+        + [extracted.get("escalation_recommendation", "")]
+    ):
+        items.append(
+            checklist_item(
+                "Containment options reviewed",
+                "needs_review",
+                "Escalation is recommended but explicit containment options are limited.",
+            )
+        )
+    else:
+        items.append(
+            checklist_item(
+                "Containment options reviewed",
+                "missing",
+                "No containment recommendation was found.",
+            )
+        )
+
+    detection_gaps = extracted.get("detection_gaps") or []
+    detection_opportunities = extracted.get("detection_opportunities") or []
+    if detection_gaps or detection_opportunities:
+        count = len(detection_gaps) + len(detection_opportunities)
+        items.append(
+            checklist_item(
+                "Detection opportunities reviewed",
+                "complete",
+                f"{count} detection gap(s) or opportunity item(s) documented.",
+            )
+        )
+    else:
+        items.append(
+            checklist_item(
+                "Detection opportunities reviewed",
+                "missing",
+                "No detection gaps or detection opportunities were documented.",
+            )
+        )
+
+    if extracted.get("has_report_documentation"):
+        doc_type = "ticket note" if extracted.get("ticket_note") else "incident report"
+        items.append(
+            checklist_item(
+                "Ticket/report documentation reviewed",
+                "complete",
+                f"A {doc_type} is available for escalation or closure documentation.",
+            )
+        )
+    else:
+        items.append(
+            checklist_item(
+                "Ticket/report documentation reviewed",
+                "missing",
+                "No ticket note or incident report documentation was found.",
+            )
+        )
+
+    return items
+
+
+def _assess_closure_readiness(extracted: dict) -> str:
+    """Assess whether the case may be ready for closure."""
+    risk_level = extracted.get("risk_level", "unknown").lower()
+    confidence_score = int(extracted.get("confidence_score", 0))
+    attack_chain = extracted.get("possible_attack_chain") or []
+    next_steps = extracted.get("recommended_next_steps") or []
+    escalation_text = extracted.get("escalation_recommendation", "")
+
+    escalation_recommended = _escalation_actively_recommended(
+        next_steps + [escalation_text]
+    )
+    containment_recommended = _review_text_mentions(
+        next_steps + [escalation_text],
+        ("contain", "isolation", "block"),
+    )
+
+    core_observables_present = all(
+        _review_observable_value(extracted, key)
+        for key in ("source_ip", "host", "username")
+    )
+
+    if (
+        risk_level == "high"
+        or attack_chain
+        or escalation_recommended
+        or containment_recommended
+    ):
+        return "low"
+
+    if (
+        risk_level == "low"
+        and confidence_score <= 69
+        and not attack_chain
+        and not escalation_recommended
+        and not containment_recommended
+        and core_observables_present
+    ):
+        return "high"
+
+    if risk_level == "low" and not attack_chain and not escalation_recommended:
+        return "medium"
+
+    return "low"
+
+
+def _assess_escalation_readiness(extracted: dict) -> str:
+    """Assess whether the case is ready for escalation."""
+    risk_level = extracted.get("risk_level", "unknown").lower()
+    confidence_score = int(extracted.get("confidence_score", 0))
+    attack_chain = extracted.get("possible_attack_chain") or []
+    mitre_mapping = extracted.get("mitre_mapping") or []
+    timeline = extracted.get("attack_timeline") or []
+
+    criteria_met = sum(
+        [
+            risk_level == "high",
+            confidence_score >= 70,
+            bool(attack_chain),
+            bool(mitre_mapping),
+            bool(timeline),
+        ]
+    )
+
+    if criteria_met >= 4:
+        return "high"
+    if criteria_met >= 2:
+        return "medium"
+    return "low"
+
+
+def _assess_containment_readiness(extracted: dict) -> str:
+    """Assess whether containment review can proceed with available context."""
+    risk_level = extracted.get("risk_level", "unknown").lower()
+    if risk_level not in ("medium", "high"):
+        return "low"
+
+    has_source_ip = bool(_review_observable_value(extracted, "source_ip"))
+    has_host = bool(_review_observable_value(extracted, "host"))
+    has_user = bool(_review_observable_value(extracted, "username"))
+    has_containment = _review_has_containment_context(extracted)
+
+    key_details = sum([has_source_ip, has_host, has_user])
+
+    if risk_level == "high" and key_details == 3 and has_containment:
+        return "high"
+    if risk_level in ("medium", "high") and key_details >= 2:
+        return "medium"
+    if risk_level in ("medium", "high") and key_details >= 1:
+        return "medium"
+    return "low"
+
+
+def _assess_detection_engineering_readiness(extracted: dict) -> str:
+    """Assess whether the case is ready for detection engineering handoff."""
+    mitre_mapping = extracted.get("mitre_mapping") or []
+    detection_gaps = extracted.get("detection_gaps") or []
+    detection_opportunities = extracted.get("detection_opportunities") or []
+    alert_type = extracted.get("alert_type", "")
+
+    has_detection_context = bool(detection_gaps or detection_opportunities)
+    has_technical_details = bool(
+        mitre_mapping
+        or alert_type
+        or extracted.get("attack_timeline")
+        or _extract_observables_list(extracted)
+    )
+
+    if mitre_mapping and has_detection_context and alert_type:
+        return "high"
+    if mitre_mapping and has_detection_context:
+        return "high"
+    if has_technical_details and not has_detection_context:
+        return "medium"
+    if has_technical_details:
+        return "medium"
+    return "low"
+
+
+def _identify_missing_information(extracted: dict) -> list[str]:
+    """List missing or weak investigation areas without claiming validation occurred."""
+    missing: list[str] = []
+
+    if not _review_observable_value(extracted, "source_ip"):
+        missing.append("Source IP not identified in investigation data")
+    else:
+        missing.append("Source IP ownership not validated")
+
+    if not extracted.get("attack_timeline"):
+        missing.append("No attack or incident timeline included")
+
+    if not extracted.get("has_report_documentation"):
+        missing.append("No ticket note found")
+
+    if not _review_has_containment_context(extracted):
+        missing.append("No containment recommendation found")
+
+    if not extracted.get("detection_gaps") and not extracted.get(
+        "detection_opportunities"
+    ):
+        missing.append("No detection gaps documented")
+
+    if not extracted.get("mitre_mapping"):
+        missing.append("No MITRE ATT&CK mapping found")
+
+    if not _review_observable_value(extracted, "host"):
+        missing.append("Affected host not clearly identified")
+
+    if not _review_observable_value(extracted, "username"):
+        missing.append("User or account context not clearly identified")
+
+    runbook = extracted.get("runbook")
+    has_runbook = isinstance(runbook, dict) or bool(
+        (extracted.get("correlation_results") or {}).get("correlation_summary")
+    )
+    if not has_runbook and not extracted.get("recommended_next_steps"):
+        missing.append("No investigation runbook or structured next steps found")
+
+    missing.append("No endpoint process tree included")
+    missing.append("No firewall or network telemetry included")
+
+    return missing
+
+
+def _generate_recommended_follow_up(
+    extracted: dict,
+    missing_information: list[str],
+    readiness: dict[str, str],
+) -> list[str]:
+    """Generate follow-up recommendations from gaps and readiness ratings."""
+    follow_up: list[str] = []
+
+    if "Source IP ownership not validated" in missing_information:
+        follow_up.append("Validate whether the source IP is expected for this activity.")
+    if "User or account context not clearly identified" in missing_information:
+        follow_up.append("Confirm whether user activity was authorized.")
+    if "No endpoint process tree included" in missing_information:
+        follow_up.append("Review endpoint process activity before containment or closure.")
+    if readiness.get("containment_readiness") in ("medium", "high"):
+        follow_up.append("Preserve logs and artifacts before containment actions.")
+    if "No ticket note found" in missing_information:
+        follow_up.append("Generate a ticket note before escalation or closure.")
+    if readiness.get("detection_engineering_readiness") in ("medium", "high"):
+        follow_up.append(
+            "Add detection engineering follow-up for identified gaps or opportunities."
+        )
+    if readiness.get("escalation_readiness") == "high":
+        follow_up.append(
+            "Escalate to senior analysts or incident response with the documented timeline and MITRE mapping."
+        )
+    if readiness.get("closure_readiness") == "high":
+        follow_up.append(
+            "Document closure rationale and monitoring plan if the case is closed."
+        )
+    if not follow_up:
+        follow_up.append(
+            "Continue structured investigation and update the checklist as new evidence is collected."
+        )
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in follow_up:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return deduped
+
+
+def _build_review_summary(extracted: dict, readiness: dict[str, str]) -> str:
+    """Build a short narrative summary of the decision review."""
+    risk_level = extracted.get("risk_level", "unknown")
+    confidence_score = int(extracted.get("confidence_score", 0))
+    parts = [
+        f"The investigation was reviewed at {risk_level} risk with confidence {confidence_score}/100."
+    ]
+
+    highest = max(
+        readiness.items(),
+        key=lambda item: {"low": 0, "medium": 1, "high": 2}[item[1]],
+    )
+    label_map = {
+        "closure_readiness": "closure",
+        "escalation_readiness": "escalation",
+        "containment_readiness": "containment review",
+        "detection_engineering_readiness": "detection engineering handoff",
+    }
+    parts.append(
+        f"Highest readiness signal is {label_map[highest[0]]} ({highest[1]})."
+    )
+
+    if readiness.get("escalation_readiness") == "high":
+        parts.append(
+            "Analyst should prioritize escalation with supporting timeline and MITRE context."
+        )
+    elif readiness.get("closure_readiness") == "high":
+        parts.append(
+            "Case may be suitable for closure after confirming observables and authorization."
+        )
+    elif readiness.get("containment_readiness") in ("medium", "high"):
+        parts.append(
+            "Containment options should be reviewed before further analyst action."
+        )
+    else:
+        parts.append(
+            "Additional investigation is recommended before a final disposition decision."
+        )
+
+    return " ".join(parts)
+
+
+@mcp.tool()
+def review_investigation_decision(incident_data: dict) -> str:
+    """
+    Review investigation, correlation, or incident report data and generate a
+    decision-readiness checklist for SOC analysts.
+
+    Accepts output from investigate_security_incident, correlate_security_events,
+    generate_incident_report, investigate_ssh_alert, or
+    investigate_command_execution. Missing fields are handled gracefully.
+
+    Returns closure, escalation, containment, and detection engineering readiness
+    ratings plus an analyst checklist. No API calls, SSH commands, external
+    lookups, or file writes are performed.
+    """
+    if not isinstance(incident_data, dict):
+        return json.dumps(
+            {
+                "status": "error",
+                "analyst_note": "incident_data must be a dictionary of investigation results.",
+            },
+            indent=2,
+        )
+
+    extracted = _extract_review_fields(incident_data)
+    completeness = _compute_investigation_completeness(extracted)
+    checklist = _build_analyst_checklist(extracted)
+
+    readiness = {
+        "closure_readiness": _assess_closure_readiness(extracted),
+        "escalation_readiness": _assess_escalation_readiness(extracted),
+        "containment_readiness": _assess_containment_readiness(extracted),
+        "detection_engineering_readiness": _assess_detection_engineering_readiness(
+            extracted
+        ),
+    }
+
+    missing_information = _identify_missing_information(extracted)
+    recommended_follow_up = _generate_recommended_follow_up(
+        extracted, missing_information, readiness
+    )
+    review_summary = _build_review_summary(extracted, readiness)
+
+    analyst_note = (
+        "This review summarizes evidence already present in the investigation data. "
+        "It does not perform external validation, containment, or escalation actions. "
+        "Use the checklist and readiness ratings to support analyst judgment."
+    )
+
+    result = {
+        "status": "ok",
+        "review_summary": review_summary,
+        "investigation_completeness": completeness,
+        "missing_information": missing_information,
+        "recommended_follow_up": recommended_follow_up,
+        "closure_readiness": readiness["closure_readiness"],
+        "escalation_readiness": readiness["escalation_readiness"],
+        "containment_readiness": readiness["containment_readiness"],
+        "detection_engineering_readiness": readiness["detection_engineering_readiness"],
+        "analyst_checklist": checklist,
+        "analyst_note": analyst_note,
+    }
+    return json.dumps(result, indent=2)
+
+
 # --- Remote host inventory (read-only SSH) ---
 
 _INVENTORY_SEP = "---SEP---"

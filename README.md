@@ -42,6 +42,9 @@ The v1.0 milestone demonstrates:
 - Splunk SPL Query Generation
 - Multi-SIEM Detection Engineering Support
 - Analyst Decision Support
+- Analyst Decision Review
+- Investigation Quality Control
+- SOC Decision Support
 - AI-Assisted SOC Investigations
 - AI-Assisted Investigation Runbook Generation
 - Multi-Alert Correlation
@@ -70,6 +73,8 @@ Key capabilities include:
 - AI-Assisted Investigation Runbook Generation
 - Security Ticket Generation
 - Analyst Action Recommendations
+- Analyst Decision Review
+- Investigation Quality Control
 - Security Query Generation
 
 ---
@@ -520,6 +525,41 @@ Outputs:
 - Lessons Learned
 
 Accepts output from `investigate_security_incident`, `investigate_ssh_alert`, `investigate_command_execution`, or `correlate_security_events`. Unsupported `report_type` values default to `soc`. No API calls, SSH commands, external lookups, or file writes are performed. This tool formats and summarizes data already passed into it. Technical reports include `enriched_observables` when source IPs are available.
+
+---
+
+### review_investigation_decision
+
+Purpose:
+
+Review investigation outputs and determine whether the case is ready for closure, escalation, containment review, or detection engineering handoff.
+
+Example workflow:
+
+```text
+investigate_security_incident
+↓
+generate_incident_report
+↓
+review_investigation_decision
+↓
+Analyst Checklist
+↓
+Escalation / Closure / Detection Engineering Decision
+```
+
+Outputs:
+
+- Investigation completeness
+- Missing information
+- Closure readiness
+- Escalation readiness
+- Containment readiness
+- Detection engineering readiness
+- Analyst checklist
+- Recommended follow-up
+
+Accepts output from `investigate_security_incident`, `correlate_security_events`, `generate_incident_report`, `investigate_ssh_alert`, or `investigate_command_execution`. Missing fields are handled gracefully. No API calls, SSH commands, external lookups, or file writes are performed. This tool only reviews and summarizes data already passed into it.
 
 ---
 
@@ -1081,6 +1121,8 @@ The v1.0 core capabilities above are implemented through the following deliverab
 
 ✅ Observable Enrichment & Threat Context
 
+✅ Analyst Decision Review Checklist
+
 ✅ Real system inventory and uptime collection from aihost
 
 ---
@@ -1089,10 +1131,10 @@ The v1.0 core capabilities above are implemented through the following deliverab
 
 Suggested future phases (SOC and detection engineering focus):
 
-- Analyst decision review checklist
 - Report export to Markdown
 - Case management workflows
 - Detection validation test cases
+- External threat intelligence API integration
 
 ---
 

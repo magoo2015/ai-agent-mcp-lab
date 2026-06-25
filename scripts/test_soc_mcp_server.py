@@ -26,6 +26,7 @@ from soc_mcp_server import (  # noqa: E402
     investigate_security_incident,
     investigate_ssh_alert,
     parse_wazuh_alert,
+    review_investigation_decision,
 )
 
 WAZUH_ALERT_PATH = "sample_data/wazuh_alert.json"
@@ -649,6 +650,20 @@ INCIDENT_REPORT_REQUIRED_KEYS = [
     "analyst_notes",
 ]
 
+REVIEW_DECISION_REQUIRED_KEYS = [
+    "status",
+    "review_summary",
+    "investigation_completeness",
+    "missing_information",
+    "recommended_follow_up",
+    "closure_readiness",
+    "escalation_readiness",
+    "containment_readiness",
+    "detection_engineering_readiness",
+    "analyst_checklist",
+    "analyst_note",
+]
+
 
 def _correlated_incident_fixture() -> dict:
     """Build a realistic incident package from correlated event collection."""
@@ -752,6 +767,115 @@ def test_generate_incident_report_missing_fields_graceful() -> None:
     assert isinstance(result["risk_assessment"], dict)
     assert result["executive_summary"]
     assert result["technical_summary"]
+
+
+def _assert_review_decision_shape(result: dict) -> None:
+    for key in REVIEW_DECISION_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+
+def test_review_decision_high_risk_escalation_ready() -> None:
+    """review_investigation_decision should rate high-risk correlated incidents for escalation."""
+    incident = _correlated_incident_fixture()
+    result = json.loads(review_investigation_decision(incident_data=incident))
+
+    _assert_review_decision_shape(result)
+    assert result["status"] == "ok"
+    assert result["escalation_readiness"] == "high"
+    assert result["closure_readiness"] == "low"
+
+
+def test_review_decision_low_risk_closure_ready() -> None:
+    """review_investigation_decision should favor closure readiness for low-risk cases."""
+    correlation = json.loads(correlate_security_events([]))
+    result = json.loads(review_investigation_decision(incident_data=correlation))
+
+    _assert_review_decision_shape(result)
+    assert result["status"] == "ok"
+    assert correlation["risk_level"] == "low"
+    assert result["closure_readiness"] in ("medium", "high")
+    assert result["escalation_readiness"] == "low"
+
+
+def test_review_decision_flat_top_level_observables() -> None:
+    """review_investigation_decision should extract flat top-level incident fields."""
+    incident = {
+        "status": "ok",
+        "risk_level": "low",
+        "confidence_score": 15,
+        "incident_summary": "Routine key-based SSH access observed.",
+        "observables": {
+            "source_ip": "192.168.1.50",
+            "host": "ubuntu-agent",
+            "username": "sysadmin",
+        },
+    }
+    result = json.loads(review_investigation_decision(incident_data=incident))
+
+    _assert_review_decision_shape(result)
+    assert result["status"] == "ok"
+    assert result["closure_readiness"] in ("medium", "high")
+    assert result["escalation_readiness"] == "low"
+    assert result["containment_readiness"] == "low"
+
+    checklist = {entry["item"]: entry for entry in result["analyst_checklist"]}
+    assert checklist["Source IP identified"]["status"] == "complete"
+    assert "192.168.1.50" in checklist["Source IP identified"]["detail"]
+    assert checklist["Host identified"]["status"] == "complete"
+    assert "ubuntu-agent" in checklist["Host identified"]["detail"]
+    assert checklist["User/account identified"]["status"] == "complete"
+    assert "sysadmin" in checklist["User/account identified"]["detail"]
+    assert checklist["Risk/severity reviewed"]["status"] == "complete"
+    assert checklist["Confidence score reviewed"]["status"] == "complete"
+
+
+def test_review_decision_missing_fields_graceful() -> None:
+    """review_investigation_decision should handle missing fields gracefully."""
+    result = json.loads(review_investigation_decision(incident_data={}))
+
+    _assert_review_decision_shape(result)
+    assert result["status"] == "ok"
+    assert isinstance(result["missing_information"], list)
+    assert len(result["missing_information"]) > 0
+    assert isinstance(result["recommended_follow_up"], list)
+    assert len(result["recommended_follow_up"]) > 0
+
+
+def test_review_decision_checklist_statuses() -> None:
+    """review_investigation_decision checklist items should use valid status values."""
+    incident = _correlated_incident_fixture()
+    result = json.loads(review_investigation_decision(incident_data=incident))
+
+    _assert_review_decision_shape(result)
+    checklist = result["analyst_checklist"]
+    assert len(checklist) >= 12
+    valid_statuses = {"complete", "missing", "needs_review"}
+    for entry in checklist:
+        assert "item" in entry
+        assert entry["status"] in valid_statuses
+        assert "detail" in entry
+
+
+def test_review_decision_detection_engineering_ready() -> None:
+    """review_investigation_decision should rate DE readiness high when MITRE and gaps exist."""
+    incident = _correlated_incident_fixture()
+    result = json.loads(review_investigation_decision(incident_data=incident))
+
+    _assert_review_decision_shape(result)
+    assert result["status"] == "ok"
+    assert result["detection_engineering_readiness"] == "high"
+    assert any(
+        entry["item"] == "MITRE mapping reviewed" and entry["status"] == "complete"
+        for entry in result["analyst_checklist"]
+    )
+
+
+def test_review_decision_invalid_input() -> None:
+    """review_investigation_decision should return error for non-dict input."""
+    result = json.loads(review_investigation_decision(incident_data="not-a-dict"))  # type: ignore[arg-type]
+
+    assert result["status"] == "error"
+    assert "analyst_note" in result
 
 
 def test_generate_detection_package_includes_qradar() -> None:
@@ -973,6 +1097,27 @@ def main() -> None:
 
     test_generate_incident_report_missing_fields_graceful()
     print("PASS: generate_incident_report missing fields graceful")
+
+    test_review_decision_high_risk_escalation_ready()
+    print("PASS: review_investigation_decision high risk escalation ready")
+
+    test_review_decision_low_risk_closure_ready()
+    print("PASS: review_investigation_decision low risk closure ready")
+
+    test_review_decision_flat_top_level_observables()
+    print("PASS: review_investigation_decision flat top-level observables")
+
+    test_review_decision_missing_fields_graceful()
+    print("PASS: review_investigation_decision missing fields graceful")
+
+    test_review_decision_checklist_statuses()
+    print("PASS: review_investigation_decision checklist statuses")
+
+    test_review_decision_detection_engineering_ready()
+    print("PASS: review_investigation_decision detection engineering ready")
+
+    test_review_decision_invalid_input()
+    print("PASS: review_investigation_decision invalid input")
 
     print("\nAll SOC MCP server checks passed.")
 
