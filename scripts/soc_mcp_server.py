@@ -424,6 +424,14 @@ DEFAULT_MITRE_BY_ALERT_TYPE = {
     "suspicious_command_execution": ["T1105", "T1059", "T1027"],
 }
 
+SPLUNK_SUPPORTED_ALERT_TYPES = (
+    "ssh_auth_failure",
+    "suspicious_command_execution",
+    "linux_auth_activity",
+    "brute_force_detection",
+    "success_after_failure",
+)
+
 ATTACK_CHAIN_STAGE_BY_EVENT_TYPE = {
     "ssh_auth_failure": "Initial Access",
     "linux_auth_activity": "Valid Accounts",
@@ -1954,7 +1962,7 @@ def investigate_ssh_alert(
     - alert_summary: parsed observables from the Wazuh alert file
     - risk_score: severity, confidence, priority, and reasoning
     - investigation_summary: executive summary and recommended actions
-    - recommended_queries: Wazuh/OpenSearch and Defender/Sentinel KQL examples
+    - recommended_queries: Wazuh/OpenSearch, Defender/Sentinel KQL, and Splunk SPL examples
     - next_action: recommended investigative step based on severity and confidence
     - detection_recommendations: post-investigation detection engineering guidance
     - investigation_runbook: reusable analyst runbook for this alert type
@@ -2012,6 +2020,15 @@ def investigate_ssh_alert(
         )
     )
 
+    splunk_spl = json.loads(
+        generate_splunk_spl(
+            alert_type="ssh_auth_failure",
+            source_ip=obs["source_ip"],
+            host=obs["host"],
+            username=obs["target_user"],
+        )
+    )
+
     next_action = json.loads(
         recommend_next_action(
             severity=scored["severity"],
@@ -2043,6 +2060,7 @@ def investigate_ssh_alert(
         "recommended_queries": {
             "wazuh_opensearch": wazuh_queries,
             "defender_sentinel": defender_queries,
+            "splunk_spl": splunk_spl,
         },
         "next_action": next_action,
         "detection_recommendations": detection_recommendations,
@@ -2275,6 +2293,15 @@ def investigate_command_execution(
         )
     )
 
+    splunk_spl = json.loads(
+        generate_splunk_spl(
+            alert_type="suspicious_command_execution",
+            source_ip=source_ip,
+            host=hostname,
+            username=username,
+        )
+    )
+
     result = {
         "status": "ok",
         "command_summary": command_summary,
@@ -2286,6 +2313,7 @@ def investigate_command_execution(
         "recommended_queries": {
             "defender_kql": defender_kql,
             "sentinel_syslog_kql": sentinel_syslog_kql,
+            "splunk_spl": splunk_spl,
         },
         "recommended_actions": recommended_actions,
         "analyst_notes": analyst_notes,
@@ -3207,6 +3235,232 @@ LAST 1 DAYS"""
         "analyst_note": analyst_note,
     }
 
+    return json.dumps(result, indent=2)
+
+
+def _splunk_time_clause(hours_back: int) -> str:
+    return f"earliest=-{hours_back}h"
+
+
+def _splunk_optional_filters(
+    source_ip: str,
+    host: str,
+    username: str,
+) -> list[str]:
+    """Return SPL filter lines for non-empty, non-unknown observables."""
+    filters: list[str] = []
+    if source_ip and source_ip != "unknown":
+        filters.append(f'(src_ip="{source_ip}" OR "{source_ip}")')
+    if host and host != "unknown":
+        filters.append(f'host="{host}"')
+    if username and username != "unknown":
+        filters.append(f'user="{username}"')
+    return filters
+
+
+@mcp.tool()
+def generate_splunk_spl(
+    alert_type: str,
+    source_ip: str = "",
+    host: str = "",
+    username: str = "",
+    hours_back: int = 24,
+) -> str:
+    """
+    Generate beginner-friendly Splunk SPL investigation and detection queries
+    for supported alert types. Returns query text only (no API calls).
+
+    Supported alert types:
+    - ssh_auth_failure: Linux SSH failed password events
+    - suspicious_command_execution: curl, wget, bash -c, encoded PowerShell
+    - linux_auth_activity: SSH successful and failed auth events
+    - brute_force_detection: aggregate failed logins by source IP, host, user
+    - success_after_failure: successful auth after failed logins from same source
+    """
+    time_clause = _splunk_time_clause(hours_back)
+    optional_filters = _splunk_optional_filters(source_ip, host, username)
+    filter_block = "\n".join(optional_filters)
+    filter_suffix = f"\n{filter_block}" if filter_block else ""
+
+    if alert_type == "ssh_auth_failure":
+        description = (
+            f"SPL to hunt Linux SSH failed password events in the last {hours_back} hours."
+        )
+        spl_query = f"""index=* sourcetype=linux_secure OR sourcetype=syslog
+"Failed password"{filter_suffix}
+{time_clause}
+| table _time host user src_ip _raw"""
+        query_explanation = (
+            "Searches Linux auth logs for failed SSH password attempts. "
+            "Adjust index and sourcetype to match your environment. "
+            "Optional filters narrow results by source IP, host, or username when provided."
+        )
+        required_fields = ["_time", "host", "user", "src_ip", "_raw"]
+        investigation_use_case = (
+            "Use after an SSH authentication failure alert to find related "
+            "failed login events from the same source, host, or user."
+        )
+        analyst_note = (
+            "This tool only builds example SPL for learning and manual use. "
+            "Paste into Splunk Search & Reporting. Tune index, sourcetype, "
+            "and field names if your deployment differs. "
+            "No searches are run automatically from this MCP server."
+        )
+
+    elif alert_type == "suspicious_command_execution":
+        description = (
+            "SPL to hunt suspicious command execution patterns "
+            f"in the last {hours_back} hours."
+        )
+        host_filter = f'\nhost="{host}"' if host and host != "unknown" else ""
+        user_filter = f'\nuser="{username}"' if username and username != "unknown" else ""
+        spl_query = f"""index=* {time_clause}
+(
+  process="*curl*" OR process_name="*curl*" OR CommandLine="*curl*" OR ProcessCommandLine="*curl*"
+  OR process="*wget*" OR process_name="*wget*" OR CommandLine="*wget*" OR ProcessCommandLine="*wget*"
+  OR CommandLine="*bash -c*" OR ProcessCommandLine="*bash -c*"
+  OR CommandLine="*| bash*" OR ProcessCommandLine="*| bash*"
+  OR process="*powershell*" OR process_name="*powershell*"
+     OR CommandLine="*powershell*" OR ProcessCommandLine="*powershell*"
+  OR CommandLine="*encodedcommand*" OR ProcessCommandLine="*encodedcommand*"
+  OR CommandLine="*certutil*" OR ProcessCommandLine="*certutil*"
+){host_filter}{user_filter}
+| table _time host user process process_name CommandLine ProcessCommandLine"""
+        query_explanation = (
+            "Matches common download-and-execute and obfuscated command patterns "
+            "across process and command-line fields. Field names vary by data source "
+            "(EDR, Sysmon, Linux audit); adjust as needed."
+        )
+        required_fields = [
+            "_time",
+            "host",
+            "user",
+            "process",
+            "process_name",
+            "CommandLine",
+            "ProcessCommandLine",
+        ]
+        investigation_use_case = (
+            "Use after a suspicious command alert to hunt for the same "
+            "patterns on affected hosts or user accounts."
+        )
+        analyst_note = (
+            "This tool only builds example SPL for learning and manual use. "
+            "Paste into Splunk Search & Reporting. Validate which fields your "
+            "log sources populate (process vs CommandLine vs ProcessCommandLine). "
+            "Tune patterns to reduce false positives from admin scripts. "
+            "No searches are run automatically from this MCP server."
+        )
+
+    elif alert_type == "linux_auth_activity":
+        description = (
+            f"SPL to review Linux SSH auth activity in the last {hours_back} hours."
+        )
+        spl_query = f"""index=* sourcetype=linux_secure OR sourcetype=syslog
+("Failed password" OR "Accepted password" OR "Accepted publickey"){filter_suffix}
+{time_clause}
+| table _time host user src_ip _raw"""
+        query_explanation = (
+            "Captures both failed and successful SSH authentication events. "
+            "Useful for timeline reconstruction and spotting success-after-failure patterns."
+        )
+        required_fields = ["_time", "host", "user", "src_ip", "_raw"]
+        investigation_use_case = (
+            "Use to build a full authentication timeline on a host or for a user "
+            "during triage of Linux auth alerts."
+        )
+        analyst_note = (
+            "This tool only builds example SPL for learning and manual use. "
+            "Paste into Splunk Search & Reporting. Adjust index and sourcetype "
+            "for your syslog or linux_secure ingestion. "
+            "No searches are run automatically from this MCP server."
+        )
+
+    elif alert_type == "brute_force_detection":
+        description = (
+            "SPL to detect brute-force SSH activity by aggregating failed logins."
+        )
+        spl_query = f"""index=* sourcetype=linux_secure OR sourcetype=syslog
+"Failed password" {time_clause}
+| stats count as failed_login_count by src_ip, host, user
+| where failed_login_count >= 10
+| sort - failed_login_count"""
+        query_explanation = (
+            "Counts failed password events per source IP, host, and user. "
+            "Rows with 10 or more failures may indicate brute-force activity. "
+            "Tune the threshold for your environment."
+        )
+        required_fields = ["src_ip", "host", "user", "failed_login_count"]
+        investigation_use_case = (
+            "Use as a detection hunt or scheduled search to find sources "
+            "hammering SSH services with failed logins."
+        )
+        analyst_note = (
+            "This tool only builds example SPL for learning and manual use. "
+            "Paste into Splunk Search & Reporting or save as a scheduled search. "
+            "Lower or raise the failed_login_count threshold based on baseline noise. "
+            "No searches are run automatically from this MCP server."
+        )
+
+    elif alert_type == "success_after_failure":
+        description = (
+            "SPL to detect successful authentication after failed logins "
+            "from the same source IP and user."
+        )
+        spl_query = f"""index=* sourcetype=linux_secure OR sourcetype=syslog
+("Failed password" OR "Accepted password" OR "Accepted publickey") {time_clause}
+| eval auth_result=case(
+    match(_raw,"Failed password"),"failure",
+    match(_raw,"Accepted password|Accepted publickey"),"success"
+  )
+| stats values(auth_result) as auth_results min(_time) as first_seen max(_time) as last_seen by src_ip, host, user
+| where mvfind(auth_results,"failure")>=0 AND mvfind(auth_results,"success")>=0
+| table src_ip, host, user, auth_results, first_seen, last_seen"""
+        query_explanation = (
+            "Labels each auth event as failure or success, then groups by "
+            "source IP, host, and user. Rows with both outcomes may indicate "
+            "a successful login after brute-force attempts."
+        )
+        required_fields = [
+            "src_ip",
+            "host",
+            "user",
+            "auth_results",
+            "first_seen",
+            "last_seen",
+        ]
+        investigation_use_case = (
+            "Use to find potential account compromise where an attacker "
+            "succeeded after multiple failed SSH attempts."
+        )
+        analyst_note = (
+            "This tool only builds example SPL for learning and manual use. "
+            "Paste into Splunk Search & Reporting. This is a simplified pattern; "
+            "review timing between failure and success for your detection logic. "
+            "No searches are run automatically from this MCP server."
+        )
+
+    else:
+        result = {
+            "status": "error",
+            "analyst_note": (
+                "supported alert types are ssh_auth_failure, "
+                "suspicious_command_execution, linux_auth_activity, "
+                "brute_force_detection, success_after_failure"
+            ),
+        }
+        return json.dumps(result, indent=2)
+
+    result = {
+        "status": "ok",
+        "alert_type": alert_type,
+        "description": description,
+        "spl_query": spl_query,
+        "query_explanation": query_explanation,
+        "required_fields": required_fields,
+        "investigation_use_case": investigation_use_case,
+        "analyst_note": analyst_note,
+    }
     return json.dumps(result, indent=2)
 
 

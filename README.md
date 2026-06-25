@@ -6,9 +6,29 @@ This project demonstrates how AI agents can move beyond simple chat interactions
 
 ---
 
+# v1.0 Milestone Achieved
+
+The first stable release of this lab delivers end-to-end SOC investigation workflows through a custom Python MCP server and AI agent orchestration.
+
+**Core Capabilities:**
+
+- ✓ Alert Classification
+- ✓ Security Investigations
+- ✓ Linux Telemetry Analysis
+- ✓ Detection Engineering
+- ✓ Investigation Runbooks
+- ✓ Multi-Alert Correlation
+- ✓ Attack Chain Analysis
+- ✓ MITRE ATT&CK Mapping
+- ✓ Security Copilot Investigation Chains
+- ✓ Incident Reporting
+- ✓ Observable Enrichment
+
+---
+
 # Portfolio Highlights
 
-This project demonstrates:
+The v1.0 milestone demonstrates:
 
 - Custom Python MCP Server Development
 - AI Agent Tool Orchestration
@@ -19,6 +39,8 @@ This project demonstrates:
 - Microsoft Defender Query Generation
 - Azure Sentinel Query Generation
 - IBM QRadar AQL Detection Generation
+- Splunk SPL Query Generation
+- Multi-SIEM Detection Engineering Support
 - Analyst Decision Support
 - AI-Assisted SOC Investigations
 - AI-Assisted Investigation Runbook Generation
@@ -135,8 +157,7 @@ Next Action Recommendation
 Detection Recommendation
 ↓
 SOC Investigation Package
-
-````
+```
 
 ---
 
@@ -243,7 +264,7 @@ Returns:
 - Alert Summary
 - Risk Score
 - Investigation Summary
-- Recommended Queries
+- Recommended Queries (Wazuh/OpenSearch, Defender/Sentinel KQL, Splunk SPL)
 - Next Action
 - Investigation Runbook
 
@@ -295,7 +316,7 @@ Outputs:
 - Severity
 - Confidence Score
 - Priority
-- Recommended Queries
+- Recommended Queries (Defender KQL, Sentinel syslog KQL, Splunk SPL)
 - Recommended Actions
 - Analyst Notes
 - Investigation Runbook
@@ -898,6 +919,54 @@ Outputs:
 
 This tool does not deploy detections automatically. Paste the AQL into QRadar Log Activity or use it as the basis for a Custom Rule after review and tuning.
 
+### generate_splunk_spl
+
+Purpose:
+
+Generate Splunk SPL investigation and detection queries for supported alert types.
+
+Inputs:
+
+- Alert Type
+- Source IP (optional)
+- Host (optional)
+- Username (optional)
+- Hours Back (optional, default 24)
+
+Supported alert types:
+
+| Alert Type                   | Detection / hunt focus                                      |
+| ---------------------------- | ----------------------------------------------------------- |
+| ssh_auth_failure             | Linux SSH failed password events                            |
+| suspicious_command_execution | curl, wget, bash -c, encoded PowerShell, certutil             |
+| linux_auth_activity          | SSH successful and failed auth events                       |
+| brute_force_detection        | Aggregate failed logins by source IP, host, and username    |
+| success_after_failure        | Successful auth after failed logins from same source and user |
+
+Outputs:
+
+- Status and alert type
+- Description
+- SPL query draft
+- Query explanation
+- Required fields
+- Investigation use case
+- Analyst notes
+
+Example Workflow:
+
+```text
+Alert Investigation
+↓
+generate_splunk_spl
+↓
+Splunk Hunt Query
+↓
+Detection Engineering Review
+```
+
+This tool does not run searches automatically. Paste the SPL into Splunk Search & Reporting after review and tuning.
+
 ### generate_detection_package
 
 Bundles multiple detection engineering outputs into a single package.
@@ -949,15 +1018,16 @@ Engineering Summary
 - Microsoft Defender Hunting
 - Azure Sentinel Hunting
 - IBM QRadar AQL Detection
+- Splunk SPL Hunting
 - AI-Assisted SOC Workflows
 - MCP Tool Orchestration
 - Security Workflow Routing
 
 ---
 
-# Current Project Status
+# v1.0 Project Status
 
-Completed:
+The v1.0 core capabilities above are implemented through the following deliverables:
 
 ✅ Custom Python MCP Server
 
@@ -981,6 +1051,8 @@ Completed:
 
 ✅ QRadar AQL Detection Generation
 
+✅ Splunk SPL Query Generation
+
 ✅ Investigation Summary Generation
 
 ✅ SOC Ticket Note Generation
@@ -993,13 +1065,19 @@ Completed:
 
 ✅ Real aihost telemetry parsing (`parse_linux_auth_log`, `analyze_linux_auth_activity`)
 
+✅ Linux Telemetry Analysis
+
 ✅ AI-Assisted Investigation Runbook Generation
 
 ✅ Multi-Alert Correlation
 
+✅ Attack Chain Analysis
+
 ✅ Security Copilot-Style Investigation Chains
 
 ✅ AI-Assisted Incident Report Generation
+
+✅ Incident Reporting (SOC, executive, and technical formats)
 
 ✅ Observable Enrichment & Threat Context
 
@@ -1011,10 +1089,10 @@ Completed:
 
 Suggested future phases (SOC and detection engineering focus):
 
-- Splunk SPL query generation for hunt and detection workflows
 - Analyst decision review checklist
 - Report export to Markdown
 - Case management workflows
+- Detection validation test cases
 
 ---
 
@@ -1032,7 +1110,6 @@ Real telemetry samples (for example `sample_data/aihost_*.log`) are listed in `.
 - Persistence Detection Workflow
 - Threat Intelligence Enrichment
 - IOC Reputation Lookups
-- Splunk SPL Query Generation
 - Report Export to Markdown
 - Integration with Future AI Security Labs
 

@@ -21,6 +21,7 @@ from soc_mcp_server import (  # noqa: E402
     generate_incident_report,
     generate_investigation_runbook,
     generate_qradar_aql_detection,
+    generate_splunk_spl,
     investigate_command_execution,
     investigate_security_incident,
     investigate_ssh_alert,
@@ -141,6 +142,7 @@ def test_investigate_ssh_alert_includes_required_sections() -> None:
     assert "severity" in result["risk_score"]
     assert "executive_summary" in result["investigation_summary"]
     assert "wazuh_opensearch" in result["recommended_queries"]
+    assert "splunk_spl" in result["recommended_queries"]
     assert "recommended_action" in result["next_action"]
     assert result["detection_recommendations"]["status"] == "ok"
     assert result["investigation_runbook"]["status"] == "ok"
@@ -405,6 +407,112 @@ def test_generate_qradar_aql_detection_unsupported() -> None:
 
     assert result["aql"] == ""
     assert "Unsupported alert_type" in result["analyst_note"]
+
+
+SPLUNK_SPL_REQUIRED_KEYS = [
+    "status",
+    "alert_type",
+    "description",
+    "spl_query",
+    "query_explanation",
+    "required_fields",
+    "investigation_use_case",
+    "analyst_note",
+]
+
+
+def test_generate_splunk_spl_ssh_auth_failure() -> None:
+    """generate_splunk_spl should return SSH failed-login SPL."""
+    result_raw = generate_splunk_spl(
+        alert_type="ssh_auth_failure",
+        source_ip="203.0.113.10",
+        host="web01",
+        username="root",
+        hours_back=24,
+    )
+    result = json.loads(result_raw)
+
+    for key in SPLUNK_SPL_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+    assert result["status"] == "ok"
+    assert result["alert_type"] == "ssh_auth_failure"
+    assert "Failed password" in result["spl_query"]
+    assert "203.0.113.10" in result["spl_query"]
+    assert "web01" in result["spl_query"]
+    assert "root" in result["spl_query"]
+
+
+def test_generate_splunk_spl_suspicious_command_execution() -> None:
+    """generate_splunk_spl should return suspicious command execution SPL."""
+    result_raw = generate_splunk_spl(
+        alert_type="suspicious_command_execution",
+        host="workstation01",
+        username="alice",
+    )
+    result = json.loads(result_raw)
+
+    for key in SPLUNK_SPL_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+    assert result["status"] == "ok"
+    assert "curl" in result["spl_query"]
+    assert "powershell" in result["spl_query"] or "encodedcommand" in result["spl_query"]
+
+
+def test_generate_splunk_spl_linux_auth_activity() -> None:
+    """generate_splunk_spl should return Linux auth activity SPL."""
+    result_raw = generate_splunk_spl(alert_type="linux_auth_activity")
+    result = json.loads(result_raw)
+
+    for key in SPLUNK_SPL_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+    assert result["status"] == "ok"
+    assert "Failed password" in result["spl_query"]
+    assert "Accepted password" in result["spl_query"]
+    assert "Accepted publickey" in result["spl_query"]
+
+
+def test_generate_splunk_spl_brute_force_detection() -> None:
+    """generate_splunk_spl should return brute-force detection SPL."""
+    result_raw = generate_splunk_spl(alert_type="brute_force_detection")
+    result = json.loads(result_raw)
+
+    for key in SPLUNK_SPL_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+    assert result["status"] == "ok"
+    assert "failed_login_count" in result["spl_query"]
+    assert "stats" in result["spl_query"]
+    assert ">= 10" in result["spl_query"]
+
+
+def test_generate_splunk_spl_success_after_failure() -> None:
+    """generate_splunk_spl should return success-after-failure SPL."""
+    result_raw = generate_splunk_spl(alert_type="success_after_failure")
+    result = json.loads(result_raw)
+
+    for key in SPLUNK_SPL_REQUIRED_KEYS:
+        assert key in result, f"Missing key: {key}"
+
+    assert result["status"] == "ok"
+    assert "auth_result" in result["spl_query"]
+    assert "failure" in result["spl_query"]
+    assert "success" in result["spl_query"]
+
+
+def test_generate_splunk_spl_unsupported() -> None:
+    """generate_splunk_spl should handle unsupported alert types."""
+    result_raw = generate_splunk_spl(alert_type="unknown_alert")
+    result = json.loads(result_raw)
+
+    assert result["status"] == "error"
+    assert result["analyst_note"] == (
+        "supported alert types are ssh_auth_failure, "
+        "suspicious_command_execution, linux_auth_activity, "
+        "brute_force_detection, success_after_failure"
+    )
 
 
 INCIDENT_REQUIRED_KEYS = [
@@ -793,6 +901,24 @@ def main() -> None:
 
     test_generate_qradar_aql_detection_unsupported()
     print("PASS: generate_qradar_aql_detection unsupported alert type")
+
+    test_generate_splunk_spl_ssh_auth_failure()
+    print("PASS: generate_splunk_spl ssh_auth_failure")
+
+    test_generate_splunk_spl_suspicious_command_execution()
+    print("PASS: generate_splunk_spl suspicious_command_execution")
+
+    test_generate_splunk_spl_linux_auth_activity()
+    print("PASS: generate_splunk_spl linux_auth_activity")
+
+    test_generate_splunk_spl_brute_force_detection()
+    print("PASS: generate_splunk_spl brute_force_detection")
+
+    test_generate_splunk_spl_success_after_failure()
+    print("PASS: generate_splunk_spl success_after_failure")
+
+    test_generate_splunk_spl_unsupported()
+    print("PASS: generate_splunk_spl unsupported alert type")
 
     test_generate_detection_package_includes_qradar()
     print("PASS: generate_detection_package includes qradar_aql_detection")
