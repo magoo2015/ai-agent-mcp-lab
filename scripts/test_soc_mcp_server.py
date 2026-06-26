@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from soc_mcp_server import (  # noqa: E402
     correlate_security_events,
     enrich_observable,
+    export_incident_report_markdown,
     generate_detection_package,
     generate_incident_report,
     generate_investigation_runbook,
@@ -878,6 +879,119 @@ def test_review_decision_invalid_input() -> None:
     assert "analyst_note" in result
 
 
+MARKDOWN_REQUIRED_HEADINGS = [
+    "## Executive Summary",
+    "## Technical Summary",
+    "## Risk Assessment",
+    "## Incident Timeline",
+    "## Observables",
+    "## MITRE ATT&CK Mapping",
+    "## Containment Recommendations",
+    "## Detection Opportunities",
+    "## Lessons Learned",
+    "## Analyst Notes",
+]
+
+
+def _assert_markdown_report_shape(markdown: str) -> None:
+    assert markdown.startswith("# ")
+    for heading in MARKDOWN_REQUIRED_HEADINGS:
+        assert heading in markdown, f"Missing heading: {heading}"
+
+
+def test_export_markdown_from_soc_report() -> None:
+    """export_incident_report_markdown should export a SOC incident report."""
+    incident = _correlated_incident_fixture()
+    report = json.loads(
+        generate_incident_report(incident_data=incident, report_type="soc")
+    )
+    markdown = export_incident_report_markdown(incident_data=report)
+
+    _assert_markdown_report_shape(markdown)
+    assert "SOC Incident Report" in markdown
+    assert "| Step | Time | Event | Description |" in markdown
+    assert "| Technique ID | Name |" in markdown
+    assert "T1110" in markdown
+    assert "**Risk Level:**" in markdown
+
+
+def test_export_markdown_from_executive_report() -> None:
+    """export_incident_report_markdown should export an executive incident report."""
+    incident = _correlated_incident_fixture()
+    report = json.loads(
+        generate_incident_report(incident_data=incident, report_type="executive")
+    )
+    markdown = export_incident_report_markdown(
+        incident_data=report,
+        report_title="Executive Security Brief",
+    )
+
+    _assert_markdown_report_shape(markdown)
+    assert "# Executive Security Brief" in markdown
+    assert "Executive Summary" in markdown
+
+
+def test_export_markdown_from_technical_report() -> None:
+    """export_incident_report_markdown should export a technical incident report."""
+    incident = _correlated_incident_fixture()
+    report = json.loads(
+        generate_incident_report(incident_data=incident, report_type="technical")
+    )
+    markdown = export_incident_report_markdown(incident_data=report)
+
+    _assert_markdown_report_shape(markdown)
+    assert "Technical Incident Report" in markdown or "Technical Summary" in markdown
+    assert "| Type | Value |" in markdown
+
+
+def test_export_markdown_from_review_decision() -> None:
+    """export_incident_report_markdown should include investigation review sections."""
+    incident = _correlated_incident_fixture()
+    review = json.loads(review_investigation_decision(incident_data=incident))
+    markdown = export_incident_report_markdown(incident_data=review)
+
+    _assert_markdown_report_shape(markdown)
+    assert "## Investigation Review" in markdown
+    assert "### Readiness Ratings" in markdown
+    assert "### Missing Information" in markdown
+    assert "### Recommended Follow-Up" in markdown
+    assert "Closure Readiness" in markdown
+    assert review["escalation_readiness"] in markdown
+
+
+def test_export_markdown_missing_fields_graceful() -> None:
+    """export_incident_report_markdown should handle missing fields gracefully."""
+    markdown = export_incident_report_markdown(incident_data={})
+
+    _assert_markdown_report_shape(markdown)
+    assert "No timeline data available." in markdown
+    assert "No MITRE mappings available." in markdown
+    assert "No observables available." in markdown
+
+
+def test_export_markdown_invalid_input() -> None:
+    """export_incident_report_markdown should return an error message for non-dict input."""
+    markdown = export_incident_report_markdown(incident_data="not-a-dict")  # type: ignore[arg-type]
+    assert markdown.startswith("# Error")
+    assert "dictionary" in markdown.lower()
+
+
+def test_export_markdown_review_with_full_workflow() -> None:
+    """export_incident_report_markdown should merge report and review context when available."""
+    incident = _correlated_incident_fixture()
+    report = json.loads(
+        generate_incident_report(incident_data=incident, report_type="soc")
+    )
+    review = json.loads(review_investigation_decision(incident_data=report))
+    merged = {**report, **review}
+    markdown = export_incident_report_markdown(incident_data=merged)
+
+    _assert_markdown_report_shape(markdown)
+    assert "## Investigation Review" in markdown
+    assert "| Step | Time | Event | Description |" in markdown
+    assert "T1110" in markdown
+
+
 def test_generate_detection_package_includes_qradar() -> None:
     """generate_detection_package should include qradar_aql_detection."""
     result_raw = generate_detection_package(
@@ -1118,6 +1232,27 @@ def main() -> None:
 
     test_review_decision_invalid_input()
     print("PASS: review_investigation_decision invalid input")
+
+    test_export_markdown_from_soc_report()
+    print("PASS: export_incident_report_markdown soc report")
+
+    test_export_markdown_from_executive_report()
+    print("PASS: export_incident_report_markdown executive report")
+
+    test_export_markdown_from_technical_report()
+    print("PASS: export_incident_report_markdown technical report")
+
+    test_export_markdown_from_review_decision()
+    print("PASS: export_incident_report_markdown review decision")
+
+    test_export_markdown_missing_fields_graceful()
+    print("PASS: export_incident_report_markdown missing fields graceful")
+
+    test_export_markdown_invalid_input()
+    print("PASS: export_incident_report_markdown invalid input")
+
+    test_export_markdown_review_with_full_workflow()
+    print("PASS: export_incident_report_markdown full workflow")
 
     print("\nAll SOC MCP server checks passed.")
 

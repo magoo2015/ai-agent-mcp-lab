@@ -55,6 +55,8 @@ The v1.0 milestone demonstrates:
 - SOC and Executive Incident Reporting
 - Observable Enrichment
 - Threat Context Generation
+- Markdown Incident Report Export
+- Investigation Documentation Automation
 
 Key capabilities include:
 
@@ -560,6 +562,41 @@ Outputs:
 - Recommended follow-up
 
 Accepts output from `investigate_security_incident`, `correlate_security_events`, `generate_incident_report`, `investigate_ssh_alert`, or `investigate_command_execution`. Missing fields are handled gracefully. No API calls, SSH commands, external lookups, or file writes are performed. This tool only reviews and summarizes data already passed into it.
+
+---
+
+### export_incident_report_markdown
+
+Purpose:
+
+Export incident and investigation data into reusable Markdown documentation.
+
+Example workflow:
+
+```text
+investigate_security_incident
+↓
+generate_incident_report
+↓
+review_investigation_decision
+↓
+export_incident_report_markdown
+↓
+Markdown Report
+```
+
+Generated sections:
+
+- Executive Summary
+- Technical Summary
+- Risk Assessment
+- Timeline
+- Observables
+- MITRE Mapping
+- Investigation Review
+- Lessons Learned
+
+Accepts output from `generate_incident_report`, `investigate_security_incident`, `correlate_security_events`, or `review_investigation_decision`. Missing fields are handled gracefully with fallback text. Returns Markdown text only — no files are written, and no API calls, SSH commands, or external lookups are performed.
 
 ---
 
@@ -1123,6 +1160,8 @@ The v1.0 core capabilities above are implemented through the following deliverab
 
 ✅ Analyst Decision Review Checklist
 
+✅ Markdown Report Export
+
 ✅ Real system inventory and uptime collection from aihost
 
 ---
@@ -1131,10 +1170,11 @@ The v1.0 core capabilities above are implemented through the following deliverab
 
 Suggested future phases (SOC and detection engineering focus):
 
-- Report export to Markdown
 - Case management workflows
 - Detection validation test cases
-- External threat intelligence API integration
+- Threat intelligence API integrations
+- ServiceNow integration
+- Jira integration
 
 ---
 
@@ -1152,7 +1192,6 @@ Real telemetry samples (for example `sample_data/aihost_*.log`) are listed in `.
 - Persistence Detection Workflow
 - Threat Intelligence Enrichment
 - IOC Reputation Lookups
-- Report Export to Markdown
 - Integration with Future AI Security Labs
 
 ---

@@ -5426,6 +5426,523 @@ def review_investigation_decision(incident_data: dict) -> str:
     return json.dumps(result, indent=2)
 
 
+# --- Markdown incident report export (pure formatting, no file I/O) ---
+
+_MARKDOWN_OBSERVABLE_TYPES = (
+    "source_ip",
+    "host",
+    "username",
+    "domain",
+    "url",
+    "hash",
+    "email",
+)
+
+
+def _md_escape_cell(value: object) -> str:
+    """Escape pipe characters for Markdown table cells."""
+    text = str(value or "").strip()
+    if not text:
+        return "—"
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def _md_bullet_list(items: list, fallback: str = "No items available.") -> str:
+    """Format a list as Markdown bullets with a fallback message."""
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    if not cleaned:
+        return fallback
+    return "\n".join(f"- {item}" for item in cleaned)
+
+
+def _has_review_export_fields(incident_data: dict) -> bool:
+    """Return True when incident_data includes review_investigation_decision output."""
+    return any(
+        key in incident_data
+        for key in (
+            "review_summary",
+            "closure_readiness",
+            "escalation_readiness",
+            "containment_readiness",
+            "detection_engineering_readiness",
+            "investigation_completeness",
+            "analyst_checklist",
+        )
+    )
+
+
+def _is_structured_incident_report(incident_data: dict) -> bool:
+    """Return True when incident_data looks like generate_incident_report output."""
+    return bool(
+        incident_data.get("executive_summary")
+        or incident_data.get("report_type") in _SUPPORTED_REPORT_TYPES
+        or incident_data.get("report_title")
+    )
+
+
+def _collect_markdown_observables(incident_data: dict, extracted: dict) -> list[dict]:
+    """Collect observables from report lists, dicts, or extracted investigation fields."""
+    observables: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_observable(obs_type: str, value: object) -> None:
+        cleaned = str(value or "").strip()
+        if not cleaned or cleaned == "unknown":
+            return
+        key = (obs_type, cleaned)
+        if key in seen:
+            return
+        seen.add(key)
+        observables.append({"type": obs_type, "value": cleaned})
+
+    report_observables = incident_data.get("observables")
+    if isinstance(report_observables, list):
+        for item in report_observables:
+            if not isinstance(item, dict):
+                continue
+            add_observable(item.get("type", "unknown"), item.get("value", ""))
+    elif isinstance(report_observables, dict):
+        for obs_type, value in report_observables.items():
+            add_observable(obs_type, value)
+
+    for obs_type in _MARKDOWN_OBSERVABLE_TYPES:
+        add_observable(obs_type, incident_data.get(obs_type, ""))
+
+    observables_dict = extracted.get("observables_dict") or {}
+    if isinstance(observables_dict, dict):
+        for obs_type in _MARKDOWN_OBSERVABLE_TYPES:
+            add_observable(obs_type, observables_dict.get(obs_type, ""))
+        add_observable("username", observables_dict.get("target_user", ""))
+        add_observable("username", observables_dict.get("user", ""))
+
+    if not observables:
+        observables.extend(_extract_observables_list(extracted))
+
+    return observables
+
+
+def _collect_markdown_timeline(incident_data: dict, extracted: dict) -> list[dict]:
+    """Collect timeline steps from report output or correlation/investigation fields."""
+    timeline = _coerce_list(incident_data.get("incident_timeline"))
+    if timeline:
+        return [step for step in timeline if isinstance(step, dict)]
+
+    attack_timeline = _coerce_list(extracted.get("attack_timeline"))
+    if attack_timeline:
+        return [step for step in attack_timeline if isinstance(step, dict)]
+
+    correlation = incident_data.get("correlation_results")
+    if isinstance(correlation, dict):
+        correlation_timeline = _coerce_list(correlation.get("attack_timeline"))
+        if correlation_timeline:
+            return [step for step in correlation_timeline if isinstance(step, dict)]
+
+    return _coerce_list(incident_data.get("attack_timeline"))
+
+
+def _build_markdown_report_sections(incident_data: dict) -> dict:
+    """Normalize incident, correlation, report, or review input for Markdown export."""
+    extracted = _extract_incident_fields(incident_data)
+    review_extracted = _extract_review_fields(incident_data) if _has_review_export_fields(
+        incident_data
+    ) else extracted
+
+    if _is_structured_incident_report(incident_data):
+        report_sections = dict(incident_data)
+    else:
+        report_sections = _assemble_incident_report(extracted, "soc")
+
+    risk_assessment = report_sections.get("risk_assessment")
+    if not isinstance(risk_assessment, dict):
+        risk_assessment = _risk_assessment_dict(
+            extracted,
+            escalation_needed=(
+                extracted.get("risk_level", "unknown") == "high"
+                or int(extracted.get("confidence_score", 0)) >= 70
+            ),
+        )
+
+    review_data = {}
+    if _has_review_export_fields(incident_data):
+        review_data = {
+            "review_summary": _first_non_empty_str(
+                incident_data.get("review_summary", ""),
+                review_extracted.get("incident_summary", ""),
+            ),
+            "investigation_completeness": incident_data.get(
+                "investigation_completeness", ""
+            ),
+            "missing_information": _coerce_list(incident_data.get("missing_information")),
+            "recommended_follow_up": _coerce_list(
+                incident_data.get("recommended_follow_up")
+            ),
+            "closure_readiness": incident_data.get("closure_readiness", ""),
+            "escalation_readiness": incident_data.get("escalation_readiness", ""),
+            "containment_readiness": incident_data.get("containment_readiness", ""),
+            "detection_engineering_readiness": incident_data.get(
+                "detection_engineering_readiness", ""
+            ),
+            "analyst_checklist": _coerce_list(incident_data.get("analyst_checklist")),
+            "analyst_note": incident_data.get("analyst_note", ""),
+        }
+
+    escalation_recommendation = _first_non_empty_str(
+        incident_data.get("escalation_recommendation", ""),
+        extracted.get("escalation_recommendation", ""),
+        risk_assessment.get("summary", ""),
+    )
+
+    return {
+        "report_title": _first_non_empty_str(
+            report_sections.get("report_title", ""),
+            incident_data.get("report_title", ""),
+        ),
+        "executive_summary": _first_non_empty_str(
+            report_sections.get("executive_summary", ""),
+            incident_data.get("review_summary", ""),
+            extracted.get("incident_summary", ""),
+            "Limited incident context was available for this report.",
+        ),
+        "technical_summary": _first_non_empty_str(
+            report_sections.get("technical_summary", ""),
+            extracted.get("correlation_summary", ""),
+            "No detailed technical summary was available.",
+        ),
+        "risk_assessment": risk_assessment,
+        "risk_level": _first_non_empty_str(
+            risk_assessment.get("risk_level", ""),
+            extracted.get("risk_level", ""),
+            incident_data.get("risk_level", ""),
+        )
+        or "unknown",
+        "confidence_score": (
+            risk_assessment.get("confidence_score")
+            if risk_assessment.get("confidence_score") is not None
+            else extracted.get("confidence_score", 0)
+        ),
+        "escalation_recommendation": escalation_recommendation,
+        "incident_timeline": _collect_markdown_timeline(incident_data, extracted),
+        "observables": _collect_markdown_observables(incident_data, extracted),
+        "mitre_mapping": _coerce_list(report_sections.get("mitre_mapping"))
+        or _coerce_list(extracted.get("mitre_mapping"))
+        or _coerce_list(incident_data.get("mitre_mapping")),
+        "containment_recommendations": _coerce_list(
+            report_sections.get("containment_recommendations")
+        )
+        or _coerce_list(extracted.get("recommended_next_steps")),
+        "detection_opportunities": _coerce_list(
+            report_sections.get("detection_opportunities")
+        )
+        or _coerce_list(extracted.get("detection_gaps"))
+        + _coerce_list(extracted.get("detection_opportunities")),
+        "lessons_learned": _coerce_list(report_sections.get("lessons_learned"))
+        or _default_lessons_learned(extracted),
+        "analyst_notes": _first_non_empty_str(
+            report_sections.get("analyst_notes", ""),
+            incident_data.get("analyst_note", ""),
+            incident_data.get("analyst_notes", ""),
+            "Markdown report generated from supplied investigation data only.",
+        ),
+        "review_data": review_data,
+    }
+
+
+def _format_markdown_timeline_table(timeline: list[dict]) -> str:
+    """Format incident timeline data as a Markdown table."""
+    if not timeline:
+        return "No timeline data available."
+
+    lines = [
+        "| Step | Time | Event | Description |",
+        "|------|------|--------|-------------|",
+    ]
+    for index, step in enumerate(timeline, start=1):
+        if not isinstance(step, dict):
+            continue
+        lines.append(
+            "| {step} | {time} | {event} | {description} |".format(
+                step=_md_escape_cell(step.get("step", index)),
+                time=_md_escape_cell(step.get("timestamp", step.get("time", ""))),
+                event=_md_escape_cell(step.get("event_type", step.get("event", ""))),
+                description=_md_escape_cell(step.get("description", "")),
+            )
+        )
+    return "\n".join(lines)
+
+
+def _format_markdown_observables_table(observables: list[dict]) -> str:
+    """Format observables as a Markdown table."""
+    if not observables:
+        return "No observables available."
+
+    lines = [
+        "| Type | Value |",
+        "|------|-------|",
+    ]
+    for item in observables:
+        if not isinstance(item, dict):
+            continue
+        obs_type = item.get("type", "")
+        value = item.get("value", "")
+        if not obs_type and not value:
+            continue
+        lines.append(
+            f"| {_md_escape_cell(obs_type)} | {_md_escape_cell(value)} |"
+        )
+    if len(lines) == 2:
+        return "No observables available."
+    return "\n".join(lines)
+
+
+def _format_markdown_mitre_table(mitre_mapping: list) -> str:
+    """Format MITRE ATT&CK mappings as a Markdown table."""
+    if not mitre_mapping:
+        return "No MITRE mappings available."
+
+    lines = [
+        "| Technique ID | Name |",
+        "|--------------|------|",
+    ]
+    for entry in mitre_mapping:
+        if isinstance(entry, dict):
+            technique_id = entry.get("technique_id", entry.get("id", ""))
+            name = entry.get("name", entry.get("technique_name", ""))
+        elif isinstance(entry, str):
+            technique_id = entry
+            name = _mitre_technique_name(entry) if entry.startswith("T") else ""
+        else:
+            continue
+        if not technique_id and not name:
+            continue
+        lines.append(
+            f"| {_md_escape_cell(technique_id)} | {_md_escape_cell(name)} |"
+        )
+    if len(lines) == 2:
+        return "No MITRE mappings available."
+    return "\n".join(lines)
+
+
+def _format_markdown_risk_assessment(sections: dict) -> str:
+    """Format the risk assessment section for Markdown export."""
+    risk_assessment = sections.get("risk_assessment") or {}
+    review_data = sections.get("review_data") or {}
+
+    lines = [
+        f"- **Risk Level:** {_md_escape_cell(sections.get('risk_level', 'unknown'))}",
+        f"- **Confidence Score:** {sections.get('confidence_score', 0)}/100",
+    ]
+
+    escalation = sections.get("escalation_recommendation", "")
+    if escalation:
+        lines.append(f"- **Escalation Recommendation:** {escalation}")
+    elif risk_assessment.get("escalation_needed"):
+        lines.append(
+            "- **Escalation Recommendation:** Escalation is recommended based on risk and confidence."
+        )
+    else:
+        lines.append(
+            "- **Escalation Recommendation:** No active escalation recommendation was recorded."
+        )
+
+    readiness_fields = (
+        ("Closure Readiness", review_data.get("closure_readiness", "")),
+        ("Containment Readiness", review_data.get("containment_readiness", "")),
+        (
+            "Detection Engineering Readiness",
+            review_data.get("detection_engineering_readiness", ""),
+        ),
+    )
+    for label, value in readiness_fields:
+        if value:
+            lines.append(f"- **{label}:** {value}")
+        else:
+            lines.append(f"- **{label}:** Not assessed.")
+
+    if isinstance(risk_assessment.get("summary"), str) and risk_assessment["summary"].strip():
+        lines.append(f"\n{risk_assessment['summary'].strip()}")
+
+    return "\n".join(lines)
+
+
+def _format_markdown_investigation_review(review_data: dict) -> str:
+    """Format review_investigation_decision output for Markdown export."""
+    if not review_data:
+        return ""
+
+    parts: list[str] = ["## Investigation Review", ""]
+
+    summary = review_data.get("review_summary", "")
+    if summary:
+        parts.extend([summary, ""])
+
+    completeness = review_data.get("investigation_completeness", "")
+    if completeness:
+        parts.extend([f"**Investigation Completeness:** {completeness}", ""])
+
+    parts.extend(
+        [
+            "### Readiness Ratings",
+            "",
+            "| Category | Rating |",
+            "|----------|--------|",
+        ]
+    )
+    readiness_rows = (
+        ("Closure Readiness", review_data.get("closure_readiness", "")),
+        ("Escalation Readiness", review_data.get("escalation_readiness", "")),
+        ("Containment Readiness", review_data.get("containment_readiness", "")),
+        (
+            "Detection Engineering Readiness",
+            review_data.get("detection_engineering_readiness", ""),
+        ),
+    )
+    for label, value in readiness_rows:
+        parts.append(
+            f"| {label} | {_md_escape_cell(value or 'not assessed')} |"
+        )
+
+    parts.extend(["", "### Missing Information", ""])
+    parts.append(
+        _md_bullet_list(
+            review_data.get("missing_information", []),
+            fallback="No missing information was identified.",
+        )
+    )
+
+    parts.extend(["", "### Recommended Follow-Up", ""])
+    parts.append(
+        _md_bullet_list(
+            review_data.get("recommended_follow_up", []),
+            fallback="No follow-up actions were recommended.",
+        )
+    )
+
+    checklist = review_data.get("analyst_checklist", [])
+    if checklist:
+        parts.extend(["", "### Analyst Checklist", ""])
+        for item in checklist:
+            if isinstance(item, dict):
+                status = item.get("status", "pending")
+                text = item.get("item", item.get("check", ""))
+                parts.append(f"- [{status}] {text}")
+            else:
+                parts.append(f"- {item}")
+
+    analyst_note = review_data.get("analyst_note", "")
+    if analyst_note:
+        parts.extend(["", f"_{analyst_note}_"])
+
+    return "\n".join(parts)
+
+
+def _render_incident_report_markdown(sections: dict, report_title: str) -> str:
+    """Render normalized report sections into a Markdown document."""
+    title = _first_non_empty_str(
+        report_title,
+        sections.get("report_title", ""),
+        "Security Incident Report",
+    )
+
+    parts = [
+        f"# {title}",
+        "",
+        "## Executive Summary",
+        "",
+        sections.get("executive_summary", "No executive summary available."),
+        "",
+        "## Technical Summary",
+        "",
+        sections.get("technical_summary", "No technical summary available."),
+        "",
+        "## Risk Assessment",
+        "",
+        _format_markdown_risk_assessment(sections),
+        "",
+        "## Incident Timeline",
+        "",
+        _format_markdown_timeline_table(sections.get("incident_timeline", [])),
+        "",
+        "## Observables",
+        "",
+        _format_markdown_observables_table(sections.get("observables", [])),
+        "",
+        "## MITRE ATT&CK Mapping",
+        "",
+        _format_markdown_mitre_table(sections.get("mitre_mapping", [])),
+        "",
+        "## Containment Recommendations",
+        "",
+        _md_bullet_list(
+            sections.get("containment_recommendations", []),
+            fallback="No containment recommendations available.",
+        ),
+        "",
+        "## Detection Opportunities",
+        "",
+        _md_bullet_list(
+            sections.get("detection_opportunities", []),
+            fallback="No detection opportunities were identified.",
+        ),
+        "",
+        "## Lessons Learned",
+        "",
+        _md_bullet_list(
+            sections.get("lessons_learned", []),
+            fallback="No lessons learned were recorded.",
+        ),
+        "",
+    ]
+
+    review_markdown = _format_markdown_investigation_review(
+        sections.get("review_data") or {}
+    )
+    if review_markdown:
+        parts.extend([review_markdown, ""])
+
+    parts.extend(
+        [
+            "## Analyst Notes",
+            "",
+            sections.get("analyst_notes", "No analyst notes available."),
+            "",
+        ]
+    )
+
+    return "\n".join(parts).rstrip() + "\n"
+
+
+@mcp.tool()
+def export_incident_report_markdown(
+    incident_data: dict,
+    report_title: str = "Security Incident Report",
+) -> str:
+    """
+    Convert investigation results, incident reports, correlation output, or
+    decision review data into a formatted Markdown document.
+
+    Accepts output from generate_incident_report, investigate_security_incident,
+    correlate_security_events, or review_investigation_decision. Missing fields
+    are handled gracefully with fallback text.
+
+    Returns Markdown text only. No files are written, and no API calls, SSH
+    commands, or external lookups are performed.
+    """
+    if not isinstance(incident_data, dict):
+        return (
+            "# Error\n\n"
+            "incident_data must be a dictionary of investigation results.\n"
+        )
+
+    sections = _build_markdown_report_sections(incident_data)
+    effective_title = report_title
+    if report_title == "Security Incident Report":
+        effective_title = _first_non_empty_str(
+            sections.get("report_title", ""),
+            report_title,
+        )
+    return _render_incident_report_markdown(sections, effective_title)
+
+
 # --- Remote host inventory (read-only SSH) ---
 
 _INVENTORY_SEP = "---SEP---"
