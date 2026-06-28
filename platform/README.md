@@ -24,6 +24,24 @@ Developer workstation → Cursor + MCP → soc-assistant → structured security
 
 - gemma2:2b
 
+## Helper Scripts
+
+Operational scripts live in [`scripts/`](scripts/). Run them from anywhere; each script resolves `platform/` automatically.
+
+| Script | Purpose |
+| ------ | ------- |
+| [`scripts/deploy.sh`](scripts/deploy.sh) | Verify Docker/Compose, validate config, start the stack |
+| [`scripts/status.sh`](scripts/status.sh) | Show service status, recent logs, and Nginx health check |
+| [`scripts/stop.sh`](scripts/stop.sh) | Stop containers (`docker compose down`; volumes preserved) |
+
+```bash
+./platform/scripts/deploy.sh
+./platform/scripts/status.sh
+./platform/scripts/stop.sh
+```
+
+Optional environment overrides: copy [`.env.example`](.env.example) to `.env` in this directory.
+
 ## Documentation
 
 | Document | Purpose |
