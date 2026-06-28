@@ -13,12 +13,37 @@ For the full platform vision, security model, traffic flows, and interview-ready
 - Persistent Docker volumes for model and application data
 - DigitalOcean Ubuntu VPS deployment
 - MCP lab (`scripts/soc_mcp_server.py`) — SOC investigation tools for AI agents
+- **Observability stack** — Prometheus, Grafana, Node Exporter, and cAdvisor
 
 ## Current Architecture
 
+```text
 Browser → Nginx :80 → Open WebUI :8080 → Ollama :11434 → gemma2:2b
 
+Grafana :3001 → dashboards (Prometheus datasource)
+Prometheus ← scrapes ← Node Exporter (host metrics)
+                      ← cAdvisor (container metrics)
+                      ← Prometheus (self-monitoring)
+
 Developer workstation → Cursor + MCP → soc-assistant → structured security workflows
+```
+
+## Observability Stack
+
+| Component | Role |
+| --------- | ---- |
+| **Prometheus** | Time-series metrics database. Scrapes exporters on a schedule and stores samples for querying and alerting. |
+| **Node Exporter** | Exposes host-level metrics (CPU, memory, disk, network) from the VPS for Prometheus to collect. |
+| **cAdvisor** | Exposes per-container resource usage (CPU, memory, filesystem) from Docker for Prometheus to collect. |
+| **Grafana** | Visualization layer. Connects to Prometheus and renders dashboards for platform health and capacity. |
+
+Grafana is published on host port **3001** (`http://<vps-ip>:3001`). Prometheus, Node Exporter, and cAdvisor stay on the internal Docker network.
+
+Configuration:
+
+- `prometheus/prometheus.yml` — scrape targets and intervals
+- `grafana/` — directory reserved for future Grafana provisioning (dashboards, datasources)
+- Docker volumes `prometheus` and `grafana` persist metrics TSDB data and Grafana state
 
 ## Current Model
 
@@ -53,7 +78,7 @@ Optional environment overrides: copy [`.env.example`](.env.example) to `.env` in
 ## Platform Goals
 
 - Add HTTPS/TLS (planned for a later module; Nginx is in place as the entry point)
-- Add Prometheus and Grafana monitoring
+- Expand Grafana dashboards and basic alerting (disk, container down, high load)
 - Add promptfoo for AI prompt evaluation
 - Add garak for AI security testing
 - Add GitHub Actions for CI

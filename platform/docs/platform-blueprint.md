@@ -43,6 +43,9 @@ At a high level, development happens on a local workstation while the AI runtime
 │  │ Docker      │───▶│ Nginx        │───▶│ Open WebUI   │───▶│ Ollama  │ │
 │  │ Compose     │    │ :80          │    │ :8080        │    │ gemma2  │ │
 │  └─────────────┘    └──────────────┘    └──────────────┘    └─────────┘ │
+│  ┌─────────────────────────────────────────────────────────────────────┐ │
+│  │ Observability: Prometheus ← Node Exporter, cAdvisor; Grafana :3001  │ │
+│  └─────────────────────────────────────────────────────────────────────┘ │
 │  Host hardening: UFW, Fail2ban, non-root admin, key-based SSH         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -61,6 +64,10 @@ The repository root README documents the **application layer** (MCP tools, inves
 | **Ollama** | Local LLM inference API (`ollama/ollama` image) | Deployed |
 | **Open WebUI** | Browser chat UI connected to Ollama | Deployed (internal; proxied via Nginx) |
 | **Nginx** | Reverse proxy; public entry point on port 80 | Deployed |
+| **Prometheus** | Metrics collection and time-series storage | Deployed |
+| **Node Exporter** | Host-level metrics (CPU, memory, disk, network) | Deployed |
+| **cAdvisor** | Per-container resource metrics | Deployed |
+| **Grafana** | Dashboards and exploration UI on port 3001 | Deployed |
 | **gemma2:2b** | Small local model for chat and experimentation | Installed and tested |
 | **MCP lab** | `scripts/soc_mcp_server.py` — SOC investigation tools via MCP | v1.0 (see root README) |
 
@@ -71,6 +78,31 @@ Defined in `platform/docker-compose.yml`:
 - **ollama** — Model backend with persistent volume `ollama:/root/.ollama` (internal only)
 - **open-webui** — Web frontend; `OLLAMA_BASE_URL=http://ollama:11434`; not published to the host
 - **nginx** — Reverse proxy on host port **80**; config at `platform/nginx/default.conf`
+- **prometheus** — Metrics TSDB; config at `platform/prometheus/prometheus.yml`; volume `prometheus`
+- **node-exporter** — Host metrics on `:9100` (internal); mounts `/proc`, `/sys`, and host root
+- **cadvisor** — Container metrics on `:8080` (internal); reads Docker runtime state
+- **grafana** — Dashboards on host port **3001**; volume `grafana` for persistent state
+
+### Observability stack
+
+| Component | What it does |
+| --------- | ------------ |
+| **Prometheus** | Pull-based monitoring system. On a schedule defined in `prometheus.yml`, it HTTP-scrapes metric endpoints, stores time-series samples in a local TSDB, and supports PromQL queries for dashboards and alerts. |
+| **Node Exporter** | A Prometheus exporter that runs on the VPS and exposes hardware and OS metrics—CPU load, memory usage, disk space, network I/O—from `/proc`, `/sys`, and the root filesystem. |
+| **cAdvisor** | Container Advisor: discovers running Docker containers and exports their resource usage (CPU, memory, filesystem, network) so operators can see which services consume capacity. |
+| **Grafana** | Visualization and exploration front end. Connects to Prometheus as a data source and renders dashboards for host health, container utilization, and trends over time. |
+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Observability data path (Docker network — scrape targets internal)    │
+│                                                                         │
+│   Node Exporter (:9100) ──┐                                            │
+│   cAdvisor (:8080) ───────┼──▶ Prometheus (:9090) ──▶ Grafana (:3001) │
+│   Prometheus (self) ──────┘         TSDB volume              ▲ public   │
+│                                                               │         │
+│                                                    Operator browser     │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ### MCP lab (application layer)
 
@@ -90,8 +122,7 @@ The MCP layer uses **deterministic, bounded tools** — no arbitrary code execut
 | Component | Purpose |
 | --------- | ------- |
 | **HTTPS / TLS** | Encrypt traffic in transit (Let's Encrypt or similar); terminate TLS at Nginx |
-| **Prometheus** | Metrics collection for containers, host, and custom exporters |
-| **Grafana** | Dashboards and alerting for platform health and usage |
+| **Grafana dashboards & alerting** | Pre-built dashboards, disk/container alerts, authenticated access behind Nginx |
 | **promptfoo** | Structured prompt evaluation and regression testing for AI workflows |
 | **garak** | LLM vulnerability and probe testing (jailbreaks, prompt injection, data leakage patterns) |
 | **GitHub Actions** | CI for MCP server tests, linting, and repeatable security checks on pull requests |
@@ -123,7 +154,7 @@ Ollama container (:11434 internal)
 gemma2:2b (loaded in Ollama)
 ```
 
-Only Nginx is published on a public host port. Ollama and Open WebUI stay on the internal Docker network, which reduces the attack surface.
+Nginx (port 80) and Grafana (port 3001) are published on host ports. Ollama, Open WebUI, Prometheus, Node Exporter, and cAdvisor stay on the internal Docker network, which reduces the attack surface.
 
 ### Developer / MCP path (local or SSH session)
 
@@ -139,7 +170,26 @@ soc-assistant (Python FastMCP)
         └── JSON structured responses to the agent
 ```
 
-### Target state (after HTTPS + monitoring)
+### Observability path (deployed)
+
+```text
+Operator Browser
+        │
+        │  HTTP :3001
+        ▼
+Grafana container
+        │
+        │  PromQL (Docker network)
+        ▼
+Prometheus container
+        ▲
+        │  scrape every 15s
+        ├── Node Exporter (host metrics)
+        ├── cAdvisor (container metrics)
+        └── Prometheus (self-monitoring)
+```
+
+### Target state (after HTTPS)
 
 ```text
 Internet / VPN
@@ -149,8 +199,7 @@ Internet / VPN
 Nginx (TLS termination, rate limits, access controls)
         │
         ├── /          → Open WebUI → Ollama
-        ├── /metrics   → Prometheus (restricted)
-        └── /grafana   → Grafana (authenticated)
+        └── /grafana   → Grafana (authenticated; port 3001 direct access today)
 
 GitHub Actions (on push/PR)
         │
@@ -177,9 +226,9 @@ The platform follows **defense in depth** and **least privilege**, appropriate f
 
 | Control | Implementation |
 | ------- | -------------- |
-| Minimal exposure | Only Nginx port 80 published to the host |
-| Internal networking | Open WebUI and Ollama reachable on the Docker network only |
-| Persistence | Named volumes for models and WebUI data |
+| Minimal exposure | Nginx :80 and Grafana :3001 published; AI and scrape targets internal |
+| Internal networking | Open WebUI, Ollama, Prometheus, Node Exporter, and cAdvisor on Docker network only |
+| Persistence | Named volumes for models, WebUI data, Prometheus TSDB, and Grafana state |
 | Restart policy | `unless-stopped` for availability during reboots |
 
 ### Application layer (MCP lab)
@@ -213,8 +262,9 @@ The platform follows **defense in depth** and **least privilege**, appropriate f
 
 ### Phase 2 — Observability
 
-- [ ] Prometheus + node/cAdvisor exporters
-- [ ] Grafana dashboards (CPU, memory, container health, request latency)
+- [x] Prometheus + Node Exporter + cAdvisor
+- [x] Grafana on port 3001 with persistent volume
+- [ ] Pre-built Grafana dashboards (CPU, memory, container health)
 - [ ] Basic alerting (disk, container down, high load)
 
 ### Phase 3 — AI security engineering
@@ -245,11 +295,11 @@ Use this narrative in interviews, cover letters, or README intros.
 > I built an AI Security Engineering Platform that pairs a self-hosted LLM stack on a hardened DigitalOcean VPS with a custom MCP server for SOC workflows. The platform shows I can operate AI infrastructure safely—Docker, networking, host hardening—and build agent tooling that is bounded and auditable rather than giving models unrestricted shell access.
 
 > **Technical depth (2 minutes)**  
-> On the infrastructure side, I run Ubuntu on a VPS with UFW, Fail2ban, and SSH key-only access. Ollama and Open WebUI are deployed with Docker Compose behind an Nginx reverse proxy on port 80; only Nginx is exposed externally while the application containers stay on the internal Docker network. I use a small model (`gemma2:2b`) for cost-effective local experimentation.
+> On the infrastructure side, I run Ubuntu on a VPS with UFW, Fail2ban, and SSH key-only access. Ollama and Open WebUI are deployed with Docker Compose behind an Nginx reverse proxy on port 80, with Prometheus, Node Exporter, cAdvisor, and Grafana for host and container observability. AI and scrape targets stay on the internal Docker network; Grafana is on port 3001 for dashboards. I use a small model (`gemma2:2b`) for cost-effective local experimentation.
 >  
 > On the application side, I wrote a Python MCP server that exposes dozens of security tools—alert parsing, MITRE mapping, multi-alert correlation, detection rule drafts for multiple SIEMs, and incident report generation. The AI agent orchestrates these tools through MCP; each tool is deterministic and returns structured JSON. That design mirrors how production security copilots should work: the model plans and explains; the tools enforce guardrails and repeatable logic.  
 >  
-> My roadmap adds HTTPS on Nginx, Prometheus and Grafana for observability, and promptfoo and garak for prompt evaluation and LLM security testing, plus GitHub Actions for CI. That progression moves the project from “working lab” to “portfolio-grade platform engineering with an AI security focus.”
+> My roadmap adds HTTPS on Nginx, expanded Grafana dashboards and alerting, and promptfoo and garak for prompt evaluation and LLM security testing, plus GitHub Actions for CI. That progression moves the project from “working lab” to “portfolio-grade platform engineering with an AI security focus.”
 
 > **Why it matters to employers**  
 > Security teams need people who understand both **how to host and test AI systems safely** and **how to automate SOC work without introducing unbounded agent risk**. This repository demonstrates both: platform operations and security-aware agent design.
