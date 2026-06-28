@@ -1,5 +1,7 @@
 # AI Security Platform Lab Notes
 
+See also: [platform-blueprint.md](./platform-blueprint.md) for the full platform vision, security model, and roadmap.
+
 ## Current Status
 
 - DigitalOcean Ubuntu VPS created
