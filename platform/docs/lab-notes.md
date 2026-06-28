@@ -13,6 +13,7 @@ See also: [platform-blueprint.md](./platform-blueprint.md) for the full platform
 - Docker and Docker Compose installed
 - Ollama deployed with Docker Compose
 - Open WebUI deployed with Docker Compose
+- Nginx reverse proxy deployed (port 80)
 - gemma2:2b model installed and tested
 
 ## Architecture
@@ -23,13 +24,19 @@ The VPS runs Docker containers for AI and security tooling.
 
 Current containers:
 
-- Ollama
-- Open WebUI
+- Ollama (internal)
+- Open WebUI (internal)
+- Nginx (public entry point on port 80)
+
+Traffic flow:
+
+```text
+Browser → Nginx :80 → Open WebUI :8080 → Ollama :11434 → gemma2:2b
+```
 
 ## Next Goals
 
-- Add Nginx reverse proxy
-- Add HTTPS later
+- Add HTTPS/TLS (terminate at Nginx; planned for a later module)
 - Add promptfoo
 - Add garak
 - Add Prometheus and Grafana

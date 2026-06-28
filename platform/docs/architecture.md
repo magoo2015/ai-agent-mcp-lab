@@ -26,7 +26,11 @@ Current model:
 
 ### Open WebUI
 
-Open WebUI provides a browser-based chat interface connected to Ollama.
+Open WebUI provides a browser-based chat interface connected to Ollama. It is reachable only on the internal Docker network; users access it through Nginx.
+
+### Nginx
+
+Nginx acts as the reverse proxy and single public entry point. It listens on port 80 and forwards traffic to Open WebUI on the Docker network.
 
 ### Volumes
 
@@ -41,9 +45,13 @@ The repository root contains `scripts/soc_mcp_server.py`, a Python FastMCP serve
 ```text
 User Browser
     ↓
-Open WebUI :3000
+Nginx :80
     ↓
-Ollama :11434
+Open WebUI :8080 (internal)
+    ↓
+Ollama :11434 (internal)
     ↓
 gemma2:2b
 ```
+
+Ollama and Open WebUI are not published on public host ports. Only Nginx exposes port 80 to the host.

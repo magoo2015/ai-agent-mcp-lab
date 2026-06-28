@@ -8,6 +8,7 @@ For the full platform vision, security model, traffic flows, and interview-ready
 
 - Self-hosted Ollama LLM service
 - Open WebUI browser interface
+- Nginx reverse proxy (port 80)
 - Docker Compose deployment
 - Persistent Docker volumes for model and application data
 - DigitalOcean Ubuntu VPS deployment
@@ -15,7 +16,7 @@ For the full platform vision, security model, traffic flows, and interview-ready
 
 ## Current Architecture
 
-Browser → Open WebUI → Ollama → Local model
+Browser → Nginx :80 → Open WebUI :8080 → Ollama :11434 → gemma2:2b
 
 Developer workstation → Cursor + MCP → soc-assistant → structured security workflows
 
@@ -33,8 +34,7 @@ Developer workstation → Cursor + MCP → soc-assistant → structured security
 
 ## Platform Goals
 
-- Add Nginx reverse proxy
-- Add HTTPS/TLS
+- Add HTTPS/TLS (planned for a later module; Nginx is in place as the entry point)
 - Add Prometheus and Grafana monitoring
 - Add promptfoo for AI prompt evaluation
 - Add garak for AI security testing

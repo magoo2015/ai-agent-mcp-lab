@@ -39,10 +39,10 @@ At a high level, development happens on a local workstation while the AI runtime
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  DigitalOcean VPS — Ubuntu                                            │
-│  ┌─────────────┐    ┌──────────────┐    ┌─────────────────────────┐   │
-│  │ Docker      │───▶│ Open WebUI   │───▶│ Ollama                  │   │
-│  │ Compose     │    │ :3000        │    │ gemma2:2b               │   │
-│  └─────────────┘    └──────────────┘    └─────────────────────────┘   │
+│  ┌─────────────┐    ┌──────────────┐    ┌──────────────┐    ┌─────────┐ │
+│  │ Docker      │───▶│ Nginx        │───▶│ Open WebUI   │───▶│ Ollama  │ │
+│  │ Compose     │    │ :80          │    │ :8080        │    │ gemma2  │ │
+│  └─────────────┘    └──────────────┘    └──────────────┘    └─────────┘ │
 │  Host hardening: UFW, Fail2ban, non-root admin, key-based SSH         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -59,7 +59,8 @@ The repository root README documents the **application layer** (MCP tools, inves
 | **Ubuntu** | Linux OS; Docker runtime and future monitoring agents | Deployed |
 | **Docker Compose** | Declarative multi-container deployment (`platform/docker-compose.yml`) | Deployed |
 | **Ollama** | Local LLM inference API (`ollama/ollama` image) | Deployed |
-| **Open WebUI** | Browser chat UI connected to Ollama | Deployed (port 3000) |
+| **Open WebUI** | Browser chat UI connected to Ollama | Deployed (internal; proxied via Nginx) |
+| **Nginx** | Reverse proxy; public entry point on port 80 | Deployed |
 | **gemma2:2b** | Small local model for chat and experimentation | Installed and tested |
 | **MCP lab** | `scripts/soc_mcp_server.py` — SOC investigation tools via MCP | v1.0 (see root README) |
 
@@ -67,8 +68,9 @@ The repository root README documents the **application layer** (MCP tools, inves
 
 Defined in `platform/docker-compose.yml`:
 
-- **ollama** — Model backend with persistent volume `ollama:/root/.ollama`
-- **open-webui** — Web frontend; `OLLAMA_BASE_URL=http://ollama:11434`; published on host port **3000**
+- **ollama** — Model backend with persistent volume `ollama:/root/.ollama` (internal only)
+- **open-webui** — Web frontend; `OLLAMA_BASE_URL=http://ollama:11434`; not published to the host
+- **nginx** — Reverse proxy on host port **80**; config at `platform/nginx/default.conf`
 
 ### MCP lab (application layer)
 
@@ -87,7 +89,6 @@ The MCP layer uses **deterministic, bounded tools** — no arbitrary code execut
 
 | Component | Purpose |
 | --------- | ------- |
-| **Nginx** | Reverse proxy in front of Open WebUI; single entry point, path-based routing for future services |
 | **HTTPS / TLS** | Encrypt traffic in transit (Let's Encrypt or similar); terminate TLS at Nginx |
 | **Prometheus** | Metrics collection for containers, host, and custom exporters |
 | **Grafana** | Dashboards and alerting for platform health and usage |
@@ -106,19 +107,23 @@ These components are intentionally staged: establish a stable, hardened base fir
 ```text
 Analyst / Developer Browser
         │
-        │  HTTP (port 3000)
+        │  HTTP (port 80)
+        ▼
+Nginx container (:80)
+        │
+        │  HTTP (Docker network)
         ▼
 Open WebUI container (:8080 internal)
         │
         │  HTTP (Docker network)
         ▼
-Ollama container (:11434)
+Ollama container (:11434 internal)
         │
         ▼
 gemma2:2b (loaded in Ollama)
 ```
 
-Ollama is **not** exposed on a public host port in the current Compose file. Only Open WebUI is published, which reduces the attack surface.
+Only Nginx is published on a public host port. Ollama and Open WebUI stay on the internal Docker network, which reduces the attack surface.
 
 ### Developer / MCP path (local or SSH session)
 
@@ -134,12 +139,12 @@ soc-assistant (Python FastMCP)
         └── JSON structured responses to the agent
 ```
 
-### Target state (after Nginx + HTTPS + monitoring)
+### Target state (after HTTPS + monitoring)
 
 ```text
 Internet / VPN
         │
-        │  HTTPS :443
+        │  HTTPS :443 (planned — TLS not yet configured)
         ▼
 Nginx (TLS termination, rate limits, access controls)
         │
@@ -172,8 +177,8 @@ The platform follows **defense in depth** and **least privilege**, appropriate f
 
 | Control | Implementation |
 | ------- | -------------- |
-| Minimal exposure | Only Open WebUI port 3000 published to the host |
-| Internal networking | Ollama reachable on the Docker network, not the public interface |
+| Minimal exposure | Only Nginx port 80 published to the host |
+| Internal networking | Open WebUI and Ollama reachable on the Docker network only |
 | Persistence | Named volumes for models and WebUI data |
 | Restart policy | `unless-stopped` for availability during reboots |
 
@@ -203,7 +208,7 @@ The platform follows **defense in depth** and **least privilege**, appropriate f
 - [x] VPS provisioning and host hardening
 - [x] Docker Compose stack (Ollama + Open WebUI)
 - [x] Local model (`gemma2:2b`) validated
-- [ ] Nginx reverse proxy
+- [x] Nginx reverse proxy
 - [ ] HTTPS with automated certificate renewal
 
 ### Phase 2 — Observability
@@ -240,11 +245,11 @@ Use this narrative in interviews, cover letters, or README intros.
 > I built an AI Security Engineering Platform that pairs a self-hosted LLM stack on a hardened DigitalOcean VPS with a custom MCP server for SOC workflows. The platform shows I can operate AI infrastructure safely—Docker, networking, host hardening—and build agent tooling that is bounded and auditable rather than giving models unrestricted shell access.
 
 > **Technical depth (2 minutes)**  
-> On the infrastructure side, I run Ubuntu on a VPS with UFW, Fail2ban, and SSH key-only access. Ollama and Open WebUI are deployed with Docker Compose; only the WebUI port is exposed externally while Ollama stays on the internal Docker network. I use a small model (`gemma2:2b`) for cost-effective local experimentation.  
+> On the infrastructure side, I run Ubuntu on a VPS with UFW, Fail2ban, and SSH key-only access. Ollama and Open WebUI are deployed with Docker Compose behind an Nginx reverse proxy on port 80; only Nginx is exposed externally while the application containers stay on the internal Docker network. I use a small model (`gemma2:2b`) for cost-effective local experimentation.
 >  
 > On the application side, I wrote a Python MCP server that exposes dozens of security tools—alert parsing, MITRE mapping, multi-alert correlation, detection rule drafts for multiple SIEMs, and incident report generation. The AI agent orchestrates these tools through MCP; each tool is deterministic and returns structured JSON. That design mirrors how production security copilots should work: the model plans and explains; the tools enforce guardrails and repeatable logic.  
 >  
-> My roadmap adds Nginx and HTTPS, Prometheus and Grafana for observability, and promptfoo and garak for prompt evaluation and LLM security testing, plus GitHub Actions for CI. That progression moves the project from “working lab” to “portfolio-grade platform engineering with an AI security focus.”
+> My roadmap adds HTTPS on Nginx, Prometheus and Grafana for observability, and promptfoo and garak for prompt evaluation and LLM security testing, plus GitHub Actions for CI. That progression moves the project from “working lab” to “portfolio-grade platform engineering with an AI security focus.”
 
 > **Why it matters to employers**  
 > Security teams need people who understand both **how to host and test AI systems safely** and **how to automate SOC work without introducing unbounded agent risk**. This repository demonstrates both: platform operations and security-aware agent design.
