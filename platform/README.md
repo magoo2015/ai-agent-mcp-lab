@@ -73,6 +73,7 @@ Optional environment overrides: copy [`.env.example`](.env.example) to `.env` in
 | -------- | ------- |
 | [docs/platform-blueprint.md](docs/platform-blueprint.md) | Full platform blueprint (architecture, security, roadmap) |
 | [docs/architecture.md](docs/architecture.md) | Current component and traffic-flow summary |
+| [docs/observability.md](docs/observability.md) | Prometheus, Grafana, exporters, dashboards, and troubleshooting |
 | [docs/lab-notes.md](docs/lab-notes.md) | Deployment status and operational checklist |
 
 ## Platform Goals
