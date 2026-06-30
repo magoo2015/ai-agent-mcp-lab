@@ -42,7 +42,13 @@ At a high level, development happens on a local workstation while the AI runtime
 │  ┌─────────────┐    ┌──────────────┐    ┌──────────────┐    ┌─────────┐ │
 │  │ Docker      │───▶│ Nginx        │───▶│ Open WebUI   │───▶│ Ollama  │ │
 │  │ Compose     │    │ :80          │    │ :8080        │    │ gemma2  │ │
-│  └─────────────┘    └──────────────┘    └──────────────┘    └─────────┘ │
+│  └─────────────┘    └──────┬───────┘    └──────────────┘    └─────────┘ │
+│                            │ /gateway/                                   │
+│                            ▼                                             │
+│                     ┌──────────────┐                                     │
+│                     │ AI Gateway   │──────────────────────────▶ Ollama   │
+│                     │ :8000        │                                     │
+│                     └──────────────┘                                     │
 │  ┌─────────────────────────────────────────────────────────────────────┐ │
 │  │ Observability: Prometheus ← Node Exporter, cAdvisor; Grafana :3001  │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
@@ -61,8 +67,9 @@ The repository root README documents the **application layer** (MCP tools, inves
 | **DigitalOcean VPS** | Cloud host for the self-hosted AI stack | Deployed |
 | **Ubuntu** | Linux OS; Docker runtime and future monitoring agents | Deployed |
 | **Docker Compose** | Declarative multi-container deployment (`platform/docker-compose.yml`) | Deployed |
-| **Ollama** | Local LLM inference API (`ollama/ollama` image) | Deployed |
-| **Open WebUI** | Browser chat UI connected to Ollama | Deployed (internal; proxied via Nginx) |
+| **Ollama** | Local LLM inference API (`ollama/ollama` image) | Optional (`ai` profile) |
+| **Open WebUI** | Browser chat UI connected to Ollama | Deployed (internal; proxied via Nginx at `/`) |
+| **AI Gateway** | FastAPI proxy to Ollama; foundation for routing, logging, and security testing | Optional (`ai` profile; `/gateway/` via Nginx) |
 | **Nginx** | Reverse proxy; public entry point on port 80 | Deployed |
 | **Prometheus** | Metrics collection and time-series storage | Deployed |
 | **Node Exporter** | Host-level metrics (CPU, memory, disk, network) | Deployed |
@@ -75,9 +82,10 @@ The repository root README documents the **application layer** (MCP tools, inves
 
 Defined in `platform/docker-compose.yml`:
 
-- **ollama** — Model backend with persistent volume `ollama:/root/.ollama` (internal only)
-- **open-webui** — Web frontend; `OLLAMA_BASE_URL=http://ollama:11434`; not published to the host
-- **nginx** — Reverse proxy on host port **80**; config at `platform/nginx/default.conf`
+- **ollama** — Model backend with persistent volume `ollama:/root/.ollama` (internal only); **`profiles: ["ai"]`**
+- **open-webui** — Web frontend; `OLLAMA_BASE_URL=http://ollama:11434`; not published to the host; core profile
+- **ai-gateway** — FastAPI service built from `platform/ai-gateway/`; `OLLAMA_BASE_URL=http://ollama:11434`; not published to the host; **`profiles: ["ai"]`**
+- **nginx** — Reverse proxy on host port **80**; config at `platform/nginx/default.conf`; routes `/` to Open WebUI and `/gateway/` to AI Gateway (502 when ai-gateway is stopped)
 - **prometheus** — Metrics TSDB; config at `platform/prometheus/prometheus.yml`; volume `prometheus`
 - **node-exporter** — Host metrics on `:9100` (internal); mounts `/proc`, `/sys`, and host root
 - **cadvisor** — Container metrics on `:8080` (internal); reads Docker runtime state
@@ -123,8 +131,8 @@ The MCP layer uses **deterministic, bounded tools** — no arbitrary code execut
 | --------- | ------- |
 | **HTTPS / TLS** | Encrypt traffic in transit (Let's Encrypt or similar); terminate TLS at Nginx |
 | **Grafana dashboards & alerting** | Pre-built dashboards, disk/container alerts, authenticated access behind Nginx |
-| **promptfoo** | Structured prompt evaluation and regression testing for AI workflows |
-| **garak** | LLM vulnerability and probe testing (jailbreaks, prompt injection, data leakage patterns) |
+| **promptfoo** | Structured prompt evaluation and regression testing for AI workflows (target: AI Gateway) |
+| **garak** | LLM vulnerability and probe testing (jailbreaks, prompt injection, data leakage patterns; target: AI Gateway) |
 | **GitHub Actions** | CI for MCP server tests, linting, and repeatable security checks on pull requests |
 
 These components are intentionally staged: establish a stable, hardened base first, then add observability and AI-specific security testing.
@@ -154,7 +162,28 @@ Ollama container (:11434 internal)
 gemma2:2b (loaded in Ollama)
 ```
 
-Nginx (port 80) and Grafana (port 3001) are published on host ports. Ollama, Open WebUI, Prometheus, Node Exporter, and cAdvisor stay on the internal Docker network, which reduces the attack surface.
+### AI Gateway path (deployed)
+
+```text
+Client (curl, promptfoo, garak, MCP tooling)
+        │
+        │  HTTP /gateway/ (port 80)
+        ▼
+Nginx container (:80)
+        │
+        │  HTTP (Docker network)
+        ▼
+AI Gateway container (:8000 internal)
+        │
+        │  HTTP (Docker network)
+        ▼
+Ollama container (:11434 internal)
+        │
+        ▼
+gemma2:2b (loaded in Ollama)
+```
+
+Nginx (port 80) and Grafana (port 3001) are published on host ports. Ollama, Open WebUI, AI Gateway, Prometheus, Node Exporter, and cAdvisor stay on the internal Docker network, which reduces the attack surface.
 
 ### Developer / MCP path (local or SSH session)
 
@@ -199,6 +228,7 @@ Internet / VPN
 Nginx (TLS termination, rate limits, access controls)
         │
         ├── /          → Open WebUI → Ollama
+        ├── /gateway/  → AI Gateway → Ollama
         └── /grafana   → Grafana (authenticated; port 3001 direct access today)
 
 GitHub Actions (on push/PR)
@@ -227,7 +257,7 @@ The platform follows **defense in depth** and **least privilege**, appropriate f
 | Control | Implementation |
 | ------- | -------------- |
 | Minimal exposure | Nginx :80 and Grafana :3001 published; AI and scrape targets internal |
-| Internal networking | Open WebUI, Ollama, Prometheus, Node Exporter, and cAdvisor on Docker network only |
+| Internal networking | Open WebUI, AI Gateway, Ollama, Prometheus, Node Exporter, and cAdvisor on Docker network only |
 | Persistence | Named volumes for models, WebUI data, Prometheus TSDB, and Grafana state |
 | Restart policy | `unless-stopped` for availability during reboots |
 
@@ -258,6 +288,7 @@ The platform follows **defense in depth** and **least privilege**, appropriate f
 - [x] Docker Compose stack (Ollama + Open WebUI)
 - [x] Local model (`gemma2:2b`) validated
 - [x] Nginx reverse proxy
+- [x] AI Gateway (FastAPI proxy to Ollama)
 - [ ] HTTPS with automated certificate renewal
 
 ### Phase 2 — Observability
@@ -295,7 +326,7 @@ Use this narrative in interviews, cover letters, or README intros.
 > I built an AI Security Engineering Platform that pairs a self-hosted LLM stack on a hardened DigitalOcean VPS with a custom MCP server for SOC workflows. The platform shows I can operate AI infrastructure safely—Docker, networking, host hardening—and build agent tooling that is bounded and auditable rather than giving models unrestricted shell access.
 
 > **Technical depth (2 minutes)**  
-> On the infrastructure side, I run Ubuntu on a VPS with UFW, Fail2ban, and SSH key-only access. Ollama and Open WebUI are deployed with Docker Compose behind an Nginx reverse proxy on port 80, with Prometheus, Node Exporter, cAdvisor, and Grafana for host and container observability. AI and scrape targets stay on the internal Docker network; Grafana is on port 3001 for dashboards. I use a small model (`gemma2:2b`) for cost-effective local experimentation.
+> On the infrastructure side, I run Ubuntu on a VPS with UFW, Fail2ban, and SSH key-only access. Ollama and Open WebUI are deployed with Docker Compose behind an Nginx reverse proxy on port 80, with a FastAPI AI Gateway at `/gateway/` for programmatic access and future promptfoo/garak integration. Prometheus, Node Exporter, cAdvisor, and Grafana provide host and container observability. AI and scrape targets stay on the internal Docker network; Grafana is on port 3001 for dashboards. I use a small model (`gemma2:2b`) for cost-effective local experimentation.
 >  
 > On the application side, I wrote a Python MCP server that exposes dozens of security tools—alert parsing, MITRE mapping, multi-alert correlation, detection rule drafts for multiple SIEMs, and incident report generation. The AI agent orchestrates these tools through MCP; each tool is deterministic and returns structured JSON. That design mirrors how production security copilots should work: the model plans and explains; the tools enforce guardrails and repeatable logic.  
 >  

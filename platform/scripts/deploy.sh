@@ -27,7 +27,11 @@ echo "==> Validating compose configuration"
 docker compose config
 echo
 
-echo "==> Starting services"
+echo "==> Starting core platform (nginx, open-webui, observability)"
+echo "    AI inference (ollama, ai-gateway) is optional — use the ai profile:"
+echo "      docker compose --profile ai up -d"
+echo "    Or: ./scripts/start-ai.sh"
+echo
 docker compose up -d
 echo
 

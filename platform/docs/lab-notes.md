@@ -11,11 +11,33 @@ See also: [platform-blueprint.md](./platform-blueprint.md) for the full platform
 - Fail2ban enabled
 - Root SSH login disabled
 - Docker and Docker Compose installed
-- Ollama deployed with Docker Compose
-- Open WebUI deployed with Docker Compose
-- Nginx reverse proxy deployed (port 80)
-- gemma2:2b model installed and tested
+- Core platform deployed (Open WebUI, Nginx, observability) — default `deploy.sh`
+- Ollama and AI Gateway optional via Docker Compose **`ai` profile** (`start-ai.sh`)
+- gemma2:2b model installed and tested (when AI profile is running)
+- tinyllama model installed (default fast test model for AI Gateway)
 - Observability stack deployed (Prometheus, Grafana, Node Exporter, cAdvisor)
+
+## Core vs AI profile
+
+| Profile | Services |
+| ------- | -------- |
+| **(default)** | nginx, open-webui, prometheus, grafana, node-exporter, cadvisor |
+| **`ai`** | ollama, ai-gateway |
+
+On a **2 vCPU / 4GB** VPS, start inference only when needed:
+
+```bash
+./platform/scripts/start-ai.sh
+# or: docker compose --profile ai up -d
+```
+
+Stop inference without stopping observability:
+
+```bash
+./platform/scripts/stop-ai.sh
+```
+
+Ollama is optional because local LLM inference is heavy on CPU and RAM. Running it continuously on a small VPS can slow SSH, Grafana, and other services. **tinyllama** is the default fast test model; **gemma2:2b** is optional and slower on CPU-only hosts.
 
 ## Architecture
 
@@ -25,7 +47,8 @@ The VPS runs Docker containers for AI services and observability.
 
 Current containers:
 
-- Ollama (internal)
+**Core (always on after `deploy.sh`):**
+
 - Open WebUI (internal)
 - Nginx (public entry point on port 80)
 - Prometheus (internal — metrics TSDB)
@@ -33,10 +56,38 @@ Current containers:
 - cAdvisor (internal — container metrics)
 - Grafana (public dashboards on port 3001)
 
+**AI profile (`start-ai.sh`):**
+
+- Ollama (internal)
+- AI Gateway (internal; `/gateway/` via Nginx — returns 502 when stopped)
+
 ### AI traffic flow
 
 ```text
-Browser → Nginx :80 → Open WebUI :8080 → Ollama :11434 → gemma2:2b
+Browser → Nginx :80 / → Open WebUI :8080 → Ollama :11434 → tinyllama / gemma2:2b
+Client  → Nginx :80 /gateway/ → AI Gateway :8000 → Ollama :11434 → tinyllama (default) / gemma2:2b
+```
+
+### AI Gateway quick test
+
+Requires the `ai` profile: `./platform/scripts/start-ai.sh`
+
+```bash
+# Health check
+curl -s http://localhost/gateway/health
+
+# List models
+curl -s http://localhost/gateway/models
+
+# Chat (non-streaming; tinyllama is the default)
+curl -s http://localhost/gateway/chat \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Say hello in one sentence."}'
+
+# Chat with gemma2:2b (slower on this VPS)
+curl -s http://localhost/gateway/chat \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gemma2:2b", "prompt": "Say hello in one sentence."}'
 ```
 
 ### Observability flow
@@ -75,6 +126,6 @@ sudo ufw allow 3001/tcp
 
 - Add HTTPS/TLS (terminate at Nginx; planned for a later module)
 - Pre-built Grafana dashboards and basic alerting
-- Add promptfoo
-- Add garak
+- Add promptfoo (via AI Gateway)
+- Add garak (via AI Gateway)
 - Integrate AI Agent MCP Lab

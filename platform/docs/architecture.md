@@ -18,19 +18,34 @@ Docker is used to containerize platform services so they can be managed consiste
 
 ### Ollama
 
-Ollama runs the local language model backend.
+Ollama runs the local language model backend. It is part of the Docker Compose **`ai` profile** and does not start with the default deploy — see [README](../README.md#core-platform-vs-ai-profile).
 
-Current model:
+On a 2 vCPU / 4GB VPS, keeping Ollama stopped until needed avoids overloading the host with inference workloads alongside monitoring and the web UI.
 
-- gemma2:2b
+Installed models (when the `ai` profile is running):
+
+- **tinyllama** — default for AI Gateway `/chat` when no `model` is specified (`DEFAULT_MODEL=tinyllama`). Fast on the current 2 vCPU / 4GB VPS.
+- **gemma2:2b** — optional; higher quality but slower on CPU-only hosts. Pass `"model": "gemma2:2b"` to override the default.
+
+Larger models need more CPU, RAM, and ideally a GPU. Use small models on constrained VPS instances unless you scale up the host.
 
 ### Open WebUI
 
-Open WebUI provides a browser-based chat interface connected to Ollama. It is reachable only on the internal Docker network; users access it through Nginx.
+Open WebUI provides a browser-based chat interface connected to Ollama. It is reachable only on the internal Docker network; users access it through Nginx at `/`. It starts with the **core** profile; chat requires Ollama (`docker compose --profile ai up -d` or `./scripts/start-ai.sh`).
+
+### AI Gateway
+
+A lightweight FastAPI service (`platform/ai-gateway/`) that proxies requests to Ollama. It is internal-only, exposed through Nginx at `/gateway/`, and part of the **`ai` profile**. If ai-gateway is not running, Nginx still serves `/gateway/` but returns **502 Bad Gateway**. Endpoints:
+
+- `GET /health` — service status
+- `GET /models` — available models (Ollama `/api/tags`)
+- `POST /chat` — non-streaming generation (`prompt` required; `model` optional, defaults to `DEFAULT_MODEL`)
+
+This layer is the foundation for future model routing, request logging, promptfoo evaluation, garak security probes, and MCP integration.
 
 ### Nginx
 
-Nginx acts as the reverse proxy and single public entry point for the AI chat stack. It listens on port 80 and forwards traffic to Open WebUI on the Docker network.
+Nginx acts as the reverse proxy and single public entry point for the AI chat stack. It listens on port 80 and forwards `/` to Open WebUI and `/gateway/` to the AI Gateway on the Docker network. Nginx depends only on Open WebUI at startup so the core stack can run without the `ai` profile.
 
 ### Observability
 
@@ -57,10 +72,17 @@ The repository root contains `scripts/soc_mcp_server.py`, a Python FastMCP serve
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  DigitalOcean VPS — Ubuntu                                                  │
 │                                                                             │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌────────┐ │
-│  │ Nginx :80    │────▶│ Open WebUI   │────▶│ Ollama       │────▶│ gemma2 │ │
-│  │ (public)     │     │ :8080 int.   │     │ :11434 int.  │     │ :2b    │ │
-│  └──────────────┘     └──────────────┘     └──────────────┘     └────────┘ │
+│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐ │
+│  │ Nginx :80    │────▶│ Open WebUI   │────▶│ Ollama       │────▶│ tinyllama│ │
+│  │ (public)     │     │ :8080 int.   │     │ :11434 int.  │     │ gemma2:2b│ │
+│  └──────┬───────┘     └──────────────┘     └──────────────┘     └──────────┘ │
+│         │                                                                   │
+│         │ /gateway/                                                         │
+│         ▼                                                                   │
+│  ┌──────────────┐                                                           │
+│  │ AI Gateway   │──────────────────────────────────────────▶ Ollama        │
+│  │ :8000 int.   │                                                           │
+│  └──────────────┘                                                           │
 │                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
 │  │ Observability (internal scrape path)                                  │  │
@@ -80,18 +102,32 @@ The repository root contains `scripts/soc_mcp_server.py`, a Python FastMCP serve
 
 ## Current Traffic Flow
 
-### AI chat path
+### AI chat path (Open WebUI)
 
 ```text
 User Browser
     ↓
-Nginx :80
+Nginx :80 /
     ↓
 Open WebUI :8080 (internal)
     ↓
 Ollama :11434 (internal)
     ↓
-gemma2:2b
+tinyllama / gemma2:2b (user-selected in Open WebUI)
+```
+
+### AI Gateway path
+
+```text
+Client (browser, curl, promptfoo, garak)
+    ↓
+Nginx :80 /gateway/
+    ↓
+AI Gateway :8000 (internal)
+    ↓
+Ollama :11434 (internal)
+    ↓
+tinyllama (default) or explicit model override (e.g. gemma2:2b)
 ```
 
 ### Observability path
@@ -108,4 +144,4 @@ Prometheus (internal)
     └── Prometheus :9090 (self-monitoring)
 ```
 
-Ollama and Open WebUI are not published on public host ports. Nginx exposes port 80 for the chat UI; Grafana exposes port 3001 for metrics dashboards.
+Ollama, Open WebUI, and the AI Gateway are not published on public host ports. Nginx exposes port 80 for the chat UI and gateway API; Grafana exposes port 3001 for metrics dashboards.
