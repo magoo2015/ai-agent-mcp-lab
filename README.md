@@ -206,6 +206,11 @@ ai-agent-mcp-lab/
 │   └── project_context.md
 ├── notes/
 │   └── lab_journal.md
+├── platform/
+│   ├── prompts/              # SOC analyst prompt templates
+│   ├── docs/prompt-library.md
+│   ├── promptfoo/
+│   └── ai-gateway/
 ├── sample_data/
 │   ├── wazuh_alert.json
 │   └── command_execution_alert.json
@@ -215,6 +220,22 @@ ai-agent-mcp-lab/
 ├── LICENSE
 └── README.md
 ```
+
+---
+
+# AI Security Platform & Prompt Library
+
+The [`platform/`](platform/) directory hosts the self-hosted AI stack (gateway, observability, promptfoo) alongside a **SOC analyst prompt library**:
+
+| Resource | Description |
+| -------- | ----------- |
+| [platform/docs/prompt-library.md](platform/docs/prompt-library.md) | Why prompts matter, organization, gateway integration, promptfoo evaluation |
+| [platform/prompts/alert_summary.md](platform/prompts/alert_summary.md) | Structured alert triage summary |
+| [platform/prompts/mitre_mapping.md](platform/prompts/mitre_mapping.md) | Evidence-linked MITRE ATT&CK mapping |
+| [platform/prompts/detection_recommendation.md](platform/prompts/detection_recommendation.md) | Detection engineering recommendations |
+| [platform/prompts/executive_summary.md](platform/prompts/executive_summary.md) | Executive incident briefing |
+
+Platform operations and AI Gateway details: [platform/README.md](platform/README.md).
 
 ---
 

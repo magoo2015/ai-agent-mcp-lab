@@ -153,5 +153,6 @@ To add tests:
 ## Related Documentation
 
 - [../README.md](../README.md) — platform overview and AI Gateway
+- [prompt-library.md](./prompt-library.md) — SOC prompt templates and evaluation guidance
 - [architecture.md](./architecture.md) — traffic flows and model defaults
 - [platform-blueprint.md](./platform-blueprint.md) — roadmap (promptfoo, garak, MCP integration)

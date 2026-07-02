@@ -148,7 +148,21 @@ Optional environment overrides: copy [`.env.example`](.env.example) to `.env` in
 | [docs/architecture.md](docs/architecture.md) | Current component and traffic-flow summary |
 | [docs/observability.md](docs/observability.md) | Prometheus, Grafana, exporters, dashboards, and troubleshooting |
 | [docs/promptfoo.md](docs/promptfoo.md) | Prompt evaluation against the AI Gateway (promptfoo) |
+| [docs/prompt-library.md](docs/prompt-library.md) | SOC analyst prompt templates (alert summary, MITRE, detection, executive) |
 | [docs/lab-notes.md](docs/lab-notes.md) | Deployment status and operational checklist |
+
+## SOC Analyst Prompt Library
+
+Reusable, structured prompt templates for common SOC workflows live in [`prompts/`](prompts/). Each template enforces grounded observations, explicit assumptions, and JSON output suitable for analyst handoff and future automation.
+
+| Template | Purpose |
+| -------- | ------- |
+| [prompts/alert_summary.md](prompts/alert_summary.md) | Triage summary from alert or log input |
+| [prompts/mitre_mapping.md](prompts/mitre_mapping.md) | Evidence-linked MITRE ATT&CK mapping |
+| [prompts/detection_recommendation.md](prompts/detection_recommendation.md) | Detection gaps and rule concepts from findings |
+| [prompts/executive_summary.md](prompts/executive_summary.md) | Leadership-facing incident narrative |
+
+See **[docs/prompt-library.md](docs/prompt-library.md)** for design rationale, gateway integration, and promptfoo evaluation guidance.
 
 ## Prompt Evaluation (promptfoo)
 
@@ -163,7 +177,7 @@ cd platform/promptfoo && npx promptfoo@latest eval
 
 - Add HTTPS/TLS (planned for a later module; Nginx is in place as the entry point)
 - Expand Grafana dashboards and basic alerting (disk, container down, high load)
-- Expand promptfoo suites for MCP tool-use and additional SOC templates
+- Wire prompt library templates into promptfoo suites and future MCP tools
 - Add garak for AI security testing (via AI Gateway)
 - Add GitHub Actions for CI
 - Integrate with the MCP security assistant
