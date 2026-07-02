@@ -52,5 +52,8 @@ credentials/
 # Local Testing
 test-output/
 
+# Promptfoo eval artifacts
+.promptfoo/
+
 # Real telemetry samples
 sample_data/aihost_*.log
