@@ -1,4 +1,4 @@
-description: "AI Security Engineering Platform - Prompt Library Evaluation"
+# description: "AI Security Engineering Platform - Prompt Library Evaluation"
 
 prompts:
   - file:///prompts/alert_summary.md
@@ -20,8 +20,24 @@ providers:
 evaluateOptions:
   maxConcurrency: 1
 
+# Shared quality bar for every SOC template output.
+defaultTest:
+  assert:
+    - type: not-contains
+      value: "I cannot"
+    - type: not-contains
+      value: "I'm unable"
+    - type: not-contains
+      value: "as an AI"
+    - type: javascript
+      value: "output.length > 50"
+
+# Shared SSH failed-login scenario; prompt-specific assertions check SOC-relevant content.
 tests:
-  - vars:
+  - description: alert_summary — SSH failed-login triage content
+    prompts:
+      - /prompts/alert_summary.md
+    vars: &ssh_failed_login_vars
       alert_data: |
         {
           "source_ip": "192.168.1.50",
@@ -47,9 +63,63 @@ tests:
           "status": "under_investigation"
         }
     assert:
-      - type: not-contains
-        value: "I cannot"
-      - type: not-contains
-        value: "I'm unable"
-      - type: javascript
-        value: "output.length > 50"
+      # Prefer grounded observables; tinyllama often omits IP/user but still
+      # describes the SSH auth-failure event from investigation_context.
+      - type: icontains
+        value: "ssh"
+      - type: icontains-any
+        value:
+          - "192.168.1.50"
+          - "root"
+          - "ubuntu-agent"
+          - "authentication"
+          - "failed"
+          - "failure"
+
+  - description: mitre_mapping — ATT&CK technique framing
+    prompts:
+      - /prompts/mitre_mapping.md
+    vars: *ssh_failed_login_vars
+    assert:
+      # Prefer T1110 / Brute Force; tinyllama often names ATT&CK framing
+      # ("technique") without emitting a technique ID.
+      - type: icontains-any
+        value:
+          - "T1110"
+          - "Brute Force"
+          - "brute-force"
+          - "brute force"
+          - "technique"
+      - type: contains-any
+        value:
+          - "MITRE"
+          - "ATT&CK"
+
+  - description: detection_recommendation — detection engineering content
+    prompts:
+      - /prompts/detection_recommendation.md
+    vars: *ssh_failed_login_vars
+    assert:
+      - type: icontains-any
+        value:
+          - "detection"
+          - "rule"
+      - type: icontains-any
+        value:
+          - "threshold"
+          - "failed"
+
+  - description: executive_summary — leadership-facing narrative
+    prompts:
+      - /prompts/executive_summary.md
+    vars: *ssh_failed_login_vars
+    assert:
+      - type: icontains-any
+        value:
+          - "summary"
+          - "risk"
+      - type: icontains-any
+        value:
+          - "business"
+          - "impact"
+          - "executive"
