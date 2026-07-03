@@ -2,7 +2,7 @@
 
 This document describes the [promptfoo](https://www.promptfoo.dev/) setup for the AI Security Engineering Platform: what it does, how to run evaluations against the AI Gateway, and why prompt regression testing matters for SOC and detection-engineering workflows.
 
-For gateway API details, see [../README.md](../README.md#ai-gateway). For architecture context, see [architecture.md](./architecture.md).
+For gateway API details, see [../README.md](../README.md#ai-gateway). For prompt template design and variable contracts, see [prompt-library.md](./prompt-library.md). For architecture context, see [architecture.md](./architecture.md).
 
 ## What Promptfoo Does
 
@@ -39,9 +39,32 @@ Content-Type: application/json
 
 The gateway response field `response` is extracted via `transformResponse: json.response`.
 
-### Test cases
+### Prompt library evaluation
 
-Three short, CPU-friendly SOC scenarios are included:
+The config evaluates the **AI SOC Analyst Prompt Library** in [`prompts/`](../prompts/). Each library template is loaded as a promptfoo prompt via `file://` and bound to a dedicated test case:
+
+| Prompt file | Test focus | Sample input |
+| ----------- | ---------- | ------------ |
+| [`alert_summary.md`](../prompts/alert_summary.md) | Structured triage JSON from raw alert | Condensed [`wazuh_alert.json`](../../sample_data/wazuh_alert.json) (rule 5710 SSH failure) |
+| [`mitre_mapping.md`](../prompts/mitre_mapping.md) | Evidence-linked ATT&CK mapping | Activity narrative derived from the same Wazuh alert |
+| [`detection_recommendation.md`](../prompts/detection_recommendation.md) | Detection gaps and rule concepts | Investigation findings from the SSH auth failure case |
+| [`executive_summary.md`](../prompts/executive_summary.md) | Leadership briefing JSON | Compact investigation package built from alert fields |
+
+**How rendering works:** promptfoo substitutes `{{variable}}` placeholders in each `.md` template using `vars` from the matching test (e.g. `alert_data`, `activity_description`, `investigation_package`). The full rendered document — including grounding rules and output schema — is sent to `/gateway/chat`.
+
+**Per-test prompt binding:** Library tests set `prompts: [<label>]` so each case runs only against its template. Three legacy generic SOC smoke tests use the `generic-soc` inline prompt for quick gateway checks.
+
+**Assertions:** Library tests combine:
+
+- `icontains-any` on **JSON schema field names** (`observations`, `confirmed_mappings`, `recommended_detections`, `executive_summary`, etc.)
+- `icontains-any` on **input-derived facts** (IPs, users, rule IDs, SSH/auth keywords)
+- `javascript` checks that attempt `JSON.parse` and fall back to regex for JSON-like structure when `tinyllama` wraps output in fences or mixes prose
+
+This is intentionally lenient for a small local model while still catching empty, off-topic, or schema-stripped responses.
+
+### Generic smoke tests
+
+Three short, CPU-friendly SOC scenarios exercise the gateway without loading library templates:
 
 | Test | Scenario |
 | ---- | -------- |
@@ -58,7 +81,7 @@ Assertions use `icontains-any` keyword checks — appropriate for a small local 
 - `maxConcurrency: 1` — one inference request at a time
 - `delay: 2000` — two-second pause between requests
 
-Override from the CLI if needed: `promptfoo eval -j 1 --delay 3000`.
+With seven test cases (three generic + four library), a full eval takes roughly 14+ seconds of delay alone, plus inference time. Override from the CLI if needed: `promptfoo eval -j 1 --delay 3000`.
 
 ## Prerequisites
 
@@ -83,6 +106,12 @@ From the repository root:
 ```bash
 cd platform/promptfoo
 npx promptfoo@latest eval
+```
+
+Run only prompt library tests (skip generic smoke tests):
+
+```bash
+npx promptfoo@latest eval --filter-pattern "alert_summary|mitre_mapping|detection_recommendation|executive_summary"
 ```
 
 View the interactive report:
@@ -110,12 +139,13 @@ To use the default `http://nginx/gateway/chat` URL without edits, run promptfoo 
 docker run --rm -it \
   --network ai-security-platform_default \
   -v "$(pwd)/platform/promptfoo:/config" \
+  -v "$(pwd)/platform/prompts:/prompts" \
   -w /config \
   node:22-slim \
   sh -c "npx promptfoo@latest eval"
 ```
 
-Adjust the network name if your Compose project name differs (`docker network ls`).
+Adjust the network name if your Compose project name differs (`docker network ls`). `file://../prompts/*.md` resolves to `/prompts` when the working directory is `/config`.
 
 ### Quick gateway smoke test
 
@@ -137,22 +167,26 @@ Security teams increasingly use LLMs to **triage alerts**, **explain suspicious 
 | **Consistency** | Same alert template should produce usable summaries after model or gateway changes |
 | **Regression** | Prompt edits or model swaps (e.g. `tinyllama` → `gemma2:2b`) can be compared side by side |
 | **Grounding** | Assertions catch empty, off-topic, or missing-keyword responses before they reach analysts |
+| **Schema compliance** | Library tests check for expected JSON sections and field names from [`prompts/`](../prompts/) |
 | **Audit trail** | Eval results document what was tested and when — useful for lab notes and portfolio narrative |
 
 This is not a replacement for red-team tooling (e.g. garak) or production guardrails. It is a **lightweight quality layer** for prompt templates that will eventually power the MCP security assistant and gateway-backed SOC workflows.
 
 ## Extending the Suite
 
-To add tests:
+To add library tests:
 
-1. Append a new entry under `tests:` in `promptfooconfig.yaml`.
-2. Keep prompts short — long context increases latency on CPU-only inference.
-3. Prefer keyword assertions (`icontains`, `icontains-any`) over model-graded rubrics for local models.
-4. Re-run `promptfoo eval` and commit config changes; eval artifacts in `.promptfoo/` are local output and need not be committed.
+1. Add a `file://../prompts/<template>.md` entry under `prompts:` with a unique `label`.
+2. Append a test with matching `prompts: [<label>]` and `vars` for every required template input (see frontmatter in the `.md` file).
+3. Keep sample inputs short — use condensed rows from [`sample_data/`](../../sample_data/) rather than full alert dumps.
+4. Assert on **schema field names** plus **input-derived keywords**; use `javascript` for lenient JSON parsing with regex fallback.
+5. Re-run `promptfoo eval` and commit config changes; eval artifacts in `.promptfoo/` are local output and need not be committed.
+
+To add generic smoke tests, append under `tests:` with `prompts: [generic-soc]` and an `input` var.
 
 ## Related Documentation
 
 - [../README.md](../README.md) — platform overview and AI Gateway
-- [prompt-library.md](./prompt-library.md) — SOC prompt templates and evaluation guidance
+- [prompt-library.md](./prompt-library.md) — SOC prompt templates, variable contracts, and evaluation guidance
 - [architecture.md](./architecture.md) — traffic flows and model defaults
 - [platform-blueprint.md](./platform-blueprint.md) — roadmap (promptfoo, garak, MCP integration)
