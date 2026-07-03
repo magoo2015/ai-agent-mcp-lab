@@ -85,6 +85,17 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
 
+  promptfoo:
+    profiles: ["eval"]
+    image: ghcr.io/promptfoo/promptfoo:latest
+    working_dir: /config
+    entrypoint: ["promptfoo"]
+    volumes:
+      - ./promptfoo:/config
+      - ./prompts:/prompts:ro
+    mem_limit: 512m
+    cpus: "0.50"
+
 volumes:
   ollama:
     external: true

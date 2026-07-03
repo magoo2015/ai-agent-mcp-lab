@@ -1,8 +1,17 @@
 # Promptfoo Evaluation
 
-This document describes the [promptfoo](https://www.promptfoo.dev/) setup for the AI Security Engineering Platform: what it does, how to run evaluations against the AI Gateway, and why prompt regression testing matters for SOC and detection-engineering workflows.
+This document describes the [promptfoo](https://www.promptfoo.dev/) setup for the AI Security Engineering Platform: what it does, how to run evaluations against the AI Gateway through Docker, and why prompt regression testing matters for SOC and detection-engineering workflows.
 
 For gateway API details, see [../README.md](../README.md#ai-gateway). For prompt template design and variable contracts, see [prompt-library.md](./prompt-library.md). For architecture context, see [architecture.md](./architecture.md).
+
+## Design principles
+
+- **Docker only** — Promptfoo runs in a container so the VPS host does **not** need Node, npm, or npx.
+- **Dev/eval tooling, not runtime** — Promptfoo is evaluation tooling. It is not part of the always-on platform (Nginx, Open WebUI, Grafana, Prometheus, Ollama, AI Gateway).
+- **Resource limits** — The Compose service caps memory and CPU so eval jobs cannot starve the small VPS (2 vCPU / 4 GB RAM).
+- **Low concurrency** — `maxConcurrency: 1` prevents multiple simultaneous model calls.
+- **tinyllama only** — Day-to-day evals use `tinyllama`. `gemma2:2b` is too heavy for routine evaluation on this host.
+- **CI-ready** — The same `docker compose --profile eval run` pattern is intended for GitHub Actions and other CI/CD later.
 
 ## What Promptfoo Does
 
@@ -26,12 +35,12 @@ Evaluations live in [`promptfoo/`](../promptfoo/):
 
 | File | Purpose |
 | ---- | ------- |
-| [`promptfoo/promptfooconfig.yaml`](../promptfoo/promptfooconfig.yaml) | Provider, prompts, tests, and VPS-friendly rate limits |
+| [`promptfoo/promptfooconfig.yaml`](../promptfoo/promptfooconfig.yaml) | Provider, prompts, tests, and VPS-friendly concurrency |
 
-The HTTP provider posts to:
+The HTTP provider posts to the AI Gateway service on the Compose network:
 
 ```text
-POST http://nginx/gateway/chat
+POST http://ai-gateway:8000/chat
 Content-Type: application/json
 
 {"model": "tinyllama", "prompt": "<eval prompt>"}
@@ -39,117 +48,104 @@ Content-Type: application/json
 
 The gateway response field `response` is extracted via `transformResponse: json.response`.
 
+Prompt paths are absolute inside the container (prompts are mounted at `/prompts`):
+
+- `file:///prompts/alert_summary.md`
+- `file:///prompts/mitre_mapping.md`
+- `file:///prompts/detection_recommendation.md`
+- `file:///prompts/executive_summary.md`
+
 ### Prompt library evaluation
 
-The config evaluates the **AI SOC Analyst Prompt Library** in [`prompts/`](../prompts/). Each library template is loaded as a promptfoo prompt via `file://` and bound to a dedicated test case:
+The config evaluates the **AI SOC Analyst Prompt Library** in [`prompts/`](../prompts/). Each library template is loaded as a promptfoo prompt via `file://`:
 
-| Prompt file | Test focus | Sample input |
-| ----------- | ---------- | ------------ |
-| [`alert_summary.md`](../prompts/alert_summary.md) | Structured triage JSON from raw alert | Condensed [`wazuh_alert.json`](../../sample_data/wazuh_alert.json) (rule 5710 SSH failure) |
-| [`mitre_mapping.md`](../prompts/mitre_mapping.md) | Evidence-linked ATT&CK mapping | Activity narrative derived from the same Wazuh alert |
-| [`detection_recommendation.md`](../prompts/detection_recommendation.md) | Detection gaps and rule concepts | Investigation findings from the SSH auth failure case |
-| [`executive_summary.md`](../prompts/executive_summary.md) | Leadership briefing JSON | Compact investigation package built from alert fields |
+| Prompt file | Sample input vars |
+| ----------- | ----------------- |
+| [`alert_summary.md`](../prompts/alert_summary.md) | `alert_data`, `investigation_context` |
+| [`mitre_mapping.md`](../prompts/mitre_mapping.md) | `activity_description` |
+| [`detection_recommendation.md`](../prompts/detection_recommendation.md) | `investigation_findings` |
+| [`executive_summary.md`](../prompts/executive_summary.md) | `investigation_package` |
 
-**How rendering works:** promptfoo substitutes `{{variable}}` placeholders in each `.md` template using `vars` from the matching test (e.g. `alert_data`, `activity_description`, `investigation_package`). The full rendered document — including grounding rules and output schema — is sent to `/gateway/chat`.
+**How rendering works:** promptfoo substitutes `{{variable}}` placeholders in each `.md` template using `vars` from the test case. The full rendered document — including grounding rules and output schema — is sent to the AI Gateway `/chat` endpoint.
 
-**Per-test prompt binding:** Library tests set `prompts: [<label>]` so each case runs only against its template. Three legacy generic SOC smoke tests use the `generic-soc` inline prompt for quick gateway checks.
+**Assertions:** Tests use lightweight checks suitable for a small local model:
 
-**Assertions:** Library tests combine:
-
-- `icontains-any` on **JSON schema field names** (`observations`, `confirmed_mappings`, `recommended_detections`, `executive_summary`, etc.)
-- `icontains-any` on **input-derived facts** (IPs, users, rule IDs, SSH/auth keywords)
-- `javascript` checks that attempt `JSON.parse` and fall back to regex for JSON-like structure when `tinyllama` wraps output in fences or mixes prose
-
-This is intentionally lenient for a small local model while still catching empty, off-topic, or schema-stripped responses.
-
-### Generic smoke tests
-
-Three short, CPU-friendly SOC scenarios exercise the gateway without loading library templates:
-
-| Test | Scenario |
-| ---- | -------- |
-| SOC alert summary | Summarize a failed SSH authentication alert (Wazuh-style) |
-| Suspicious SSH login | Explain why an off-hours login from an unusual IP is suspicious |
-| Detection engineering | Recommend a Sigma-style rule for `curl \| bash` execution |
-
-Assertions use `icontains-any` keyword checks — appropriate for a small local model where outputs vary, but should still mention relevant security concepts.
+- `not-contains` for refusal phrases (`I cannot`, `I'm unable`)
+- `javascript` length check (`output.length > 50`)
 
 ### VPS-friendly defaults
 
-`evaluateOptions` in the config keeps load low on the 2 vCPU / 4GB host:
+`evaluateOptions` in the config keeps load low on the 2 vCPU / 4 GB host:
 
 - `maxConcurrency: 1` — one inference request at a time
-- `delay: 2000` — two-second pause between requests
 
-With seven test cases (three generic + four library), a full eval takes roughly 14+ seconds of delay alone, plus inference time. Override from the CLI if needed: `promptfoo eval -j 1 --delay 3000`.
+The Compose service also enforces:
+
+- `mem_limit: 512m`
+- `cpus: "0.50"`
+
+## Docker Compose service
+
+The `promptfoo` service is defined in [`docker-compose.yml`](../docker-compose.yml) under the **`eval` profile**:
+
+- Image: `ghcr.io/promptfoo/promptfoo:latest`
+- Profile: `eval` (does **not** start with the default stack or the `ai` profile)
+- No published ports
+- Mounts: `./promptfoo` → `/config`, `./prompts` → `/prompts` (read-only)
+- Working directory: `/config`
+- Entrypoint: `["promptfoo"]`
+- Shares the default Compose network so it can reach `ai-gateway` by service name
 
 ## Prerequisites
 
 1. **AI profile running** — Ollama and the AI Gateway must be up:
 
    ```bash
-   ./platform/scripts/start-ai.sh
+   ./scripts/start-ai.sh
    ```
 
-2. **tinyllama available** — pull via Open WebUI or `docker exec ollama ollama pull tinyllama` if not already installed.
+2. **tinyllama available** — pull if needed:
 
-3. **Node.js** — promptfoo runs via `npx` (no project `package.json` required).
+   ```bash
+   docker exec ollama ollama pull tinyllama
+   ```
 
-4. **Network reachability** — the eval runner must reach the gateway:
-   - From the **VPS host**: `http://localhost/gateway/chat`
-   - From a **container on the Docker network**: `http://nginx/gateway/chat` (default in config)
+3. **Docker only** — do **not** install Node, npm, or npx on the host.
 
 ## How to Run Evaluations
 
-From the repository root:
+From `platform/`:
 
 ```bash
-cd platform/promptfoo
-npx promptfoo@latest eval
+./scripts/start-ai.sh
+docker compose --profile eval run --rm promptfoo eval -c /config/promptfooconfig.yaml
+./scripts/stop-ai.sh
 ```
 
-Run only prompt library tests (skip generic smoke tests):
+Optional resource monitoring in another terminal:
 
 ```bash
-npx promptfoo@latest eval --filter-pattern "alert_summary|mitre_mapping|detection_recommendation|executive_summary"
+docker stats
 ```
 
-View the interactive report:
+Validate config before a run:
 
 ```bash
-npx promptfoo@latest view
+cd promptfoo
+python3 - <<'PY'
+import yaml
+with open("promptfooconfig.yaml") as f:
+    yaml.safe_load(f)
+print("YAML valid")
+PY
+
+cd ..
+docker compose --profile eval --profile ai config
 ```
-
-### Running from the VPS host
-
-The default provider URL (`http://nginx/gateway/chat`) resolves inside the Docker network. From the host, override the provider URL:
-
-```bash
-cd platform/promptfoo
-npx promptfoo@latest eval --providers '[{"id":"http://localhost/gateway/chat","label":"ai-gateway-tinyllama","config":{"method":"POST","headers":{"Content-Type":"application/json"},"body":{"model":"tinyllama","prompt":"{{prompt}}"},"transformResponse":"json.response"}}]'
-```
-
-Or temporarily edit `promptfooconfig.yaml` to use `http://localhost/gateway/chat`.
-
-### Running inside Docker (optional)
-
-To use the default `http://nginx/gateway/chat` URL without edits, run promptfoo on the same Compose network:
-
-```bash
-docker run --rm -it \
-  --network ai-security-platform_default \
-  -v "$(pwd)/platform/promptfoo:/config" \
-  -v "$(pwd)/platform/prompts:/prompts" \
-  -w /config \
-  node:22-slim \
-  sh -c "npx promptfoo@latest eval"
-```
-
-Adjust the network name if your Compose project name differs (`docker network ls`). `file://../prompts/*.md` resolves to `/prompts` when the working directory is `/config`.
 
 ### Quick gateway smoke test
 
-Before running promptfoo, confirm the gateway responds:
+Before running promptfoo, confirm the gateway responds (via Nginx on the host):
 
 ```bash
 curl -s http://localhost/gateway/health
@@ -165,9 +161,8 @@ Security teams increasingly use LLMs to **triage alerts**, **explain suspicious 
 | Concern | How promptfoo helps |
 | ------- | ------------------- |
 | **Consistency** | Same alert template should produce usable summaries after model or gateway changes |
-| **Regression** | Prompt edits or model swaps (e.g. `tinyllama` → `gemma2:2b`) can be compared side by side |
-| **Grounding** | Assertions catch empty, off-topic, or missing-keyword responses before they reach analysts |
-| **Schema compliance** | Library tests check for expected JSON sections and field names from [`prompts/`](../prompts/) |
+| **Regression** | Prompt edits or model swaps can be compared side by side |
+| **Grounding** | Assertions catch empty, off-topic, or refusal-style responses before they reach analysts |
 | **Audit trail** | Eval results document what was tested and when — useful for lab notes and portfolio narrative |
 
 This is not a replacement for red-team tooling (e.g. garak) or production guardrails. It is a **lightweight quality layer** for prompt templates that will eventually power the MCP security assistant and gateway-backed SOC workflows.
@@ -176,13 +171,11 @@ This is not a replacement for red-team tooling (e.g. garak) or production guardr
 
 To add library tests:
 
-1. Add a `file://../prompts/<template>.md` entry under `prompts:` with a unique `label`.
-2. Append a test with matching `prompts: [<label>]` and `vars` for every required template input (see frontmatter in the `.md` file).
+1. Add a `file:///prompts/<template>.md` entry under `prompts:`.
+2. Ensure the shared test `vars` include every required template input (see frontmatter in the `.md` file).
 3. Keep sample inputs short — use condensed rows from [`sample_data/`](../../sample_data/) rather than full alert dumps.
-4. Assert on **schema field names** plus **input-derived keywords**; use `javascript` for lenient JSON parsing with regex fallback.
-5. Re-run `promptfoo eval` and commit config changes; eval artifacts in `.promptfoo/` are local output and need not be committed.
-
-To add generic smoke tests, append under `tests:` with `prompts: [generic-soc]` and an `input` var.
+4. Keep assertions lenient for `tinyllama`; tighten only when a stronger model is intentionally used.
+5. Re-run via Docker Compose; do not introduce host Node/npm.
 
 ## Related Documentation
 
