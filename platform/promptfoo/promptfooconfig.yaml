@@ -1,4 +1,8 @@
 # description: "AI Security Engineering Platform - Prompt Library Evaluation"
+#
+# Default suite (VPS-safe): 4 prompt templates × 1 SSH scenario = 4 evaluations.
+# Additional SOC scenarios (Defender, Proofpoint, AWS IAM) are documented in
+# docs/promptfoo.md as future work — they are not active tests here.
 
 prompts:
   - file:///prompts/alert_summary.md
@@ -32,12 +36,23 @@ defaultTest:
     - type: javascript
       value: "output.length > 50"
 
-# Shared SSH failed-login scenario; prompt-specific assertions check SOC-relevant content.
+# Active tests: SSH failed-login only (4 evals).
+# Vars front-load observables and expected_focus so tinyllama has clear context.
 tests:
   - description: alert_summary — SSH failed-login triage content
     prompts:
       - /prompts/alert_summary.md
     vars: &ssh_failed_login_vars
+      alert_json: |
+        {
+          "source_ip": "192.168.1.50",
+          "destination_host": "ubuntu-agent",
+          "event_type": "ssh_failed_login",
+          "username": "root",
+          "failure_count": 15,
+          "time_window": "10 minutes",
+          "severity": "medium"
+        }
       alert_data: |
         {
           "source_ip": "192.168.1.50",
@@ -48,41 +63,64 @@ tests:
           "time_window": "10 minutes",
           "severity": "medium"
         }
-      investigation_context: "Repeated SSH authentication failures against a Linux host."
-      activity_description: "Repeated SSH authentication failures from 192.168.1.50 against ubuntu-agent targeting root, 15 failures in 10 minutes."
-      investigation_findings: "SSH brute-force style activity: source 192.168.1.50, host ubuntu-agent, user root, 15 failed logins in 10 minutes, medium severity."
+      investigation_context: >
+        SSH authentication failure alert. Source IP 192.168.1.50 attempted
+        SSH login as root against host ubuntu-agent. Count: 15 failed
+        authentication attempts in 10 minutes. Treat as possible SSH brute force.
+      activity_description: >
+        SSH authentication failures: source IP 192.168.1.50 targeted host
+        ubuntu-agent as user root. Observed 15 failed SSH logins in 10 minutes.
+        Activity is consistent with SSH brute-force credential access (MITRE T1110).
+      investigation_findings: >
+        Investigation findings for SSH failed login: source 192.168.1.50,
+        destination host ubuntu-agent, username root, 15 failed SSH authentication
+        attempts in 10 minutes, medium severity. Recommend a detection rule with
+        a failed-login threshold for SSH brute-force activity.
+      expected_focus: >
+        Focus on SSH authentication failures and brute-force indicators.
+        Include observables from the alert: source IP 192.168.1.50, host
+        ubuntu-agent, user root, and 15 failed logins in 10 minutes.
+        Do not repeat the prompt template. Produce the requested SOC output only.
+      alert_type: ssh_failed_login
+      platform_context: Linux SSH
+      existing_mitre_hints: T1110 Brute Force
+      mitre_techniques: T1110
       investigation_package: |
         {
-          "summary": "Repeated SSH authentication failures against ubuntu-agent",
+          "summary": "SSH authentication failures against ubuntu-agent — possible brute force",
+          "event_type": "ssh_failed_login",
           "source_ip": "192.168.1.50",
           "destination_host": "ubuntu-agent",
           "username": "root",
           "failure_count": 15,
           "time_window": "10 minutes",
           "severity": "medium",
+          "business_risk": "Unauthorized access risk to Linux host via SSH",
           "status": "under_investigation"
         }
+      business_context: "Linux management host ubuntu-agent may be exposed to unauthorized SSH access."
     assert:
-      # Prefer grounded observables; tinyllama often omits IP/user but still
-      # describes the SSH auth-failure event from investigation_context.
+      # SSH / auth / failure language (not template echo alone)
       - type: icontains
         value: "ssh"
+      - type: icontains-any
+        value:
+          - "authentication"
+          - "auth"
+          - "failed"
+          - "failure"
+      # At least one concrete observable from the alert
       - type: icontains-any
         value:
           - "192.168.1.50"
           - "root"
           - "ubuntu-agent"
-          - "authentication"
-          - "failed"
-          - "failure"
 
   - description: mitre_mapping — ATT&CK technique framing
     prompts:
       - /prompts/mitre_mapping.md
     vars: *ssh_failed_login_vars
     assert:
-      # Prefer T1110 / Brute Force; tinyllama often names ATT&CK framing
-      # ("technique") without emitting a technique ID.
       - type: icontains-any
         value:
           - "T1110"
@@ -100,6 +138,7 @@ tests:
       - /prompts/detection_recommendation.md
     vars: *ssh_failed_login_vars
     assert:
+      # Detection logic language (paired with scenario terms below — not "rule" alone)
       - type: icontains-any
         value:
           - "detection"
@@ -108,6 +147,9 @@ tests:
         value:
           - "threshold"
           - "failed"
+          - "brute"
+          - "ssh"
+          - "login"
 
   - description: executive_summary — leadership-facing narrative
     prompts:

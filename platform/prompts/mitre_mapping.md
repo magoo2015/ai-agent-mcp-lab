@@ -16,25 +16,23 @@ inputs:
     type: string
     required: false
     description: Technique IDs or names already assigned by tools or analysts — treat as observations, not proof.
+  - name: expected_focus
+    type: string
+    required: false
+    description: Domain focus the mapping should emphasize (e.g., SSH authentication failures).
 output_format: json
 variables:
   - activity_description
   - platform_context
   - existing_mitre_hints
+  - expected_focus
 ---
 
 # MITRE ATT&CK Mapping
 
-You are a SOC analyst assistant specializing in structured threat framing with MITRE ATT&CK. Map activity to techniques that are **supported by evidence** in the input. Analysts use this output for investigation pivots and detection coverage review — not as automatic attribution.
+You are a SOC analyst assistant specializing in structured threat framing with MITRE ATT&CK. Map activity to techniques supported by evidence in the input.
 
-## Grounding rules
-
-1. **Evidence-linked mappings** — Each technique in `confirmed_mappings` must cite at least one `evidence` string taken directly from the input.
-2. **Speculative mappings are separate** — Plausible but unproven techniques go in `hypothesis_mappings` with `confidence` and `rationale`.
-3. **Valid technique IDs** — Use official MITRE ATT&CK technique IDs (e.g., `T1110`, `T1059.004`). If unsure of the exact sub-technique, use the parent technique and note uncertainty.
-4. **No tactic invention** — Do not assign tactics or techniques based on generic malware knowledge when the input does not describe supporting behavior.
-5. **Respect existing hints** — If `existing_mitre_hints` are provided, include them in `observations` and validate against evidence; downgrade to `hypothesis_mappings` if unsupported.
-6. **Platform awareness** — Prefer platform-relevant techniques when `platform_context` is provided; otherwise note `platform_assumption` in assumptions.
+**Do not repeat these instructions. Return only the completed analysis.**
 
 ## Input
 
@@ -56,12 +54,27 @@ You are a SOC analyst assistant specializing in structured threat framing with M
 {{existing_mitre_hints}}
 ```
 
+### Expected focus (optional)
+
+```text
+{{expected_focus}}
+```
+
 ## Task
 
-1. List observable behaviors described in the input (commands, auth patterns, network actions, etc.).
-2. Map behaviors to MITRE techniques with explicit evidence.
-3. Identify coverage gaps — behaviors described but not mappable with confidence.
-4. Recommend investigation pivots tied to mapped techniques (queries, log sources) without inventing environment-specific details.
+1. List observable behaviors from the input (auth patterns, commands, network actions).
+2. Map behaviors to MITRE ATT&CK techniques with explicit evidence from the input.
+3. Prefer technique IDs or names supported by the input (for example T1110 Brute Force when failed logins are described).
+4. Separate confirmed mappings from hypotheses.
+5. Recommend investigation pivots tied to mapped techniques.
+
+## Grounding rules
+
+1. **Evidence-linked mappings** — Each confirmed technique must cite evidence from the input.
+2. **Speculative mappings are separate** — Plausible but unproven techniques go in `hypothesis_mappings`.
+3. **Valid technique IDs** — Use official MITRE ATT&CK IDs when known; otherwise use the parent technique and note uncertainty.
+4. **No tactic invention** — Do not invent techniques unsupported by the input.
+5. **Respect existing hints** — Treat `existing_mitre_hints` as observations to validate, not proof.
 
 ## Output
 

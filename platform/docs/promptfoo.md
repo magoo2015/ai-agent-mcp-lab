@@ -11,6 +11,7 @@ For gateway API details, see [../README.md](../README.md#ai-gateway). For prompt
 - **Resource limits** — The Compose service caps memory and CPU so eval jobs cannot starve the small VPS (2 vCPU / 4 GB RAM).
 - **Low concurrency** — `maxConcurrency: 1` prevents multiple simultaneous model calls.
 - **tinyllama only** — Day-to-day evals use `tinyllama`. `gemma2:2b` is too heavy for routine evaluation on this host.
+- **Small default suite** — Default active tests are **4 evaluations** (4 prompt templates × 1 SSH scenario). Do not expand the default matrix on this VPS.
 - **CI-ready** — The same `docker compose --profile eval run` pattern is intended for GitHub Actions and other CI/CD later.
 
 ## What Promptfoo Does
@@ -68,23 +69,62 @@ The config evaluates the **AI SOC Analyst Prompt Library** in [`prompts/`](../pr
 
 **How rendering works:** promptfoo substitutes `{{variable}}` placeholders in each `.md` template using `vars` from the test case. The full rendered document — including grounding rules and output schema — is sent to the AI Gateway `/chat` endpoint.
 
-**Assertions:** Tests enforce a shared quality bar plus prompt-specific SOC content checks on the shared SSH failed-login scenario.
+### Default active suite (VPS-safe)
+
+**Active tests only:** SSH failed-login / brute-force scenario.
+
+| Dimension | Count |
+| --------- | ----- |
+| Prompt templates | 4 |
+| Active scenarios | 1 (SSH) |
+| **Total evaluations** | **4** |
+
+Each active scenario defines:
+
+| Field | Purpose |
+| ----- | ------- |
+| `alert_json` | Condensed alert payload (also provided as `alert_data` for `alert_summary`) |
+| `investigation_context` | Short analyst note grounding the case |
+| `expected_focus` | What domain language the assertions target |
+| Template-specific vars | `activity_description`, `investigation_findings`, `investigation_package` |
+
+This keeps routine evals under control on a 2 vCPU / 4 GB host. A full multi-scenario matrix (for example 4 prompts × 4 scenarios = 16 cases) is too slow and resource-heavy for default use here.
+
+### Future scenarios (not active)
+
+The following alert types are **planned extensions**, not part of the default `tests:` list. Do **not** enable them on this VPS unless you intentionally accept a long, low-concurrency run.
+
+| Scenario | Alert type | Intended `expected_focus` |
+| -------- | ---------- | ------------------------- |
+| Microsoft Defender endpoint | Suspicious process activity | Endpoint device, process, and suspicious or malware-like activity |
+| Proofpoint phishing | Quarantined phishing email | Phishing email, user recipient, malicious URL or attachment |
+| AWS IAM activity | Privilege change via CloudTrail | IAM user, API action, and permission or privilege change in cloud |
+
+When a stronger host or CI runner is available, add one scenario at a time with scenario-specific assertions. Do not weaken assertions to force `tinyllama` through an oversized matrix.
+
+**Why multiple scenarios matter (later):** SOC assistants must stay useful across auth, endpoint, email, and cloud signals. Multi-scenario coverage is the right long-term regression bar for Detection Engineering and AI Security Engineering work — but it is a **future** expansion, not the default on this lab VPS.
+
+### Assertions
+
+Tests enforce a shared quality bar plus **prompt-specific** SOC content checks on the SSH scenario.
 
 **Shared (all templates via `defaultTest`):**
 
 - `not-contains` refusal phrases: `I cannot`, `I'm unable`, `as an AI`
 - `javascript` length check: `output.length > 50`
 
-**Prompt-specific (same SSH failed-login vars, one test per template):**
+**Prompt-specific (SSH failed-login vars, one test per template):**
 
 | Prompt | Content assertions |
 | ------ | ------------------ |
 | `alert_summary.md` | Must mention `ssh` (case-insensitive), plus at least one scenario token (`192.168.1.50`, `root`, `ubuntu-agent`, or auth-failure language) |
 | `mitre_mapping.md` | Must include ATT&CK framing (`MITRE` or `ATT&CK`) and technique language (`T1110`, `Brute Force` / `brute-force`, or `technique`) |
-| `detection_recommendation.md` | Must include `detection` or `rule`, and `threshold` or `failed` |
+| `detection_recommendation.md` | Must include `detection` or `rule`, **and** `threshold` or `failed` (not `rule` alone) |
 | `executive_summary.md` | Must include `summary` or `risk`, and `business` / `impact` / `executive` |
 
 Length-only checks are **not enough**: a model can return a long, off-topic, or refusal-style paragraph that still passes `output.length > 50`. Content assertions verify that each template still produces **SOC-relevant** language for the scenario (observables, ATT&CK framing, detection concepts, executive narrative). That is the regression signal when prompts, gateway transforms, or models change.
+
+Do **not** broaden assertions into meaningless generic terms just to pass `tinyllama`. Prefer a small, meaningful suite over a large, diluted one.
 
 **Why not full JSON schema checks?** `tinyllama` rarely emits valid schema-shaped JSON for these long templates. Assertions therefore check **domain keywords** rather than parseable structure. Preferred tokens (source IP, `T1110`, etc.) remain in the `contains-any` lists so stronger models or improved prompts raise the bar automatically; fallback tokens keep the suite green on this VPS without dropping quality checks entirely.
 
@@ -98,10 +138,12 @@ Re-run the same SSH failed-login case after any prompt edit, gateway change, or 
 | -------- | --------------------------- |
 | **Triage (`alert_summary`)** | Output still references SSH-style auth-failure activity, not an unrelated or empty reply |
 | **Threat framing (`mitre_mapping`)** | Output stays in MITRE ATT&CK vocabulary useful for pivots and coverage review |
-| **Detection engineering (`detection_recommendation`)** | Output discusses detections/rules and thresholds or failed-login signals |
+| **Detection engineering (`detection_recommendation`)** | Output discusses detections/rules **and** thresholds or failed-login signals |
 | **Leadership reporting (`executive_summary`)** | Output uses summary/risk and business/impact/executive language |
 
 This is not a substitute for analyst review or red-team tooling (e.g. garak). It is a **lightweight regression gate** so prompt-library changes do not silently degrade assistant quality for SOC and detection workflows.
+
+Interview narrative: the default suite shows operational discipline on a constrained host (4 evals, concurrency 1, Docker-only). Multi-scenario coverage is the documented next step when resources allow — not something forced by diluting assertions.
 
 ### VPS-friendly defaults
 
@@ -204,8 +246,9 @@ To add library tests:
 1. Add a `file:///prompts/<template>.md` entry under `prompts:`.
 2. Ensure the shared test `vars` include every required template input (see frontmatter in the `.md` file).
 3. Keep sample inputs short — use condensed rows from [`sample_data/`](../../sample_data/) rather than full alert dumps.
-4. Keep assertions lenient for `tinyllama`; tighten only when a stronger model is intentionally used.
-5. Re-run via Docker Compose; do not introduce host Node/npm.
+4. Keep assertions meaningful; do not dilute them to paper over model weakness.
+5. Prefer **one scenario at a time** on this VPS. Do not enable Defender / Proofpoint / AWS in the default active suite.
+6. Re-run via Docker Compose; do not introduce host Node/npm.
 
 ## Related Documentation
 

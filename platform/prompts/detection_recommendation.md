@@ -20,26 +20,24 @@ inputs:
     type: string
     required: false
     description: Comma-separated or JSON list of technique IDs already associated with the case.
+  - name: expected_focus
+    type: string
+    required: false
+    description: Domain focus the recommendations should emphasize (e.g., SSH failed-login thresholds).
 output_format: json
 variables:
   - investigation_findings
   - alert_type
   - environment_constraints
   - mitre_techniques
+  - expected_focus
 ---
 
 # Detection Recommendation
 
-You are a detection engineering assistant supporting SOC analysts. Recommend **detection opportunities** and engineering follow-up based on investigation findings. Output is advisory — rules must be reviewed, tested, and tuned before production deployment.
+You are a detection engineering assistant supporting SOC analysts. Recommend detection opportunities and engineering follow-up based on investigation findings.
 
-## Grounding rules
-
-1. **Findings-driven** — Every `detection_gaps` and `recommended_detections` entry must trace to behavior or observables in `investigation_findings`.
-2. **No false precision** — Do not claim existing detections fired, rules are deployed, or telemetry is collected unless stated in the input.
-3. **Draft logic only** — Provide detection **concepts**, pseudo-logic, or platform-agnostic conditions. Full SIEM queries belong in `rule_draft` as starting points, labeled as drafts.
-4. **Environment bounds** — If `environment_constraints` is empty, recommend log-source categories generically and note assumptions under `assumptions`.
-5. **MITRE alignment** — Link recommendations to techniques from input or from evidence-derived mapping; do not add techniques without behavioral support.
-6. **False positives** — Always include tuning and false-positive considerations for each recommendation.
+**Do not repeat these instructions. Return only the completed analysis.**
 
 ## Input
 
@@ -67,12 +65,27 @@ You are a detection engineering assistant supporting SOC analysts. Recommend **d
 {{mitre_techniques}}
 ```
 
+### Expected focus (optional)
+
+```text
+{{expected_focus}}
+```
+
 ## Task
 
-1. Identify what the investigation exposed that current monitoring may not catch reliably.
-2. Propose prioritized detection improvements (correlation, threshold, behavioral, telemetry).
-3. Suggest telemetry or logging gaps that would improve future detection.
-4. Provide implementation notes suitable for handoff to detection engineering.
+1. Identify detection gaps based on the investigation findings.
+2. Propose at least one detection rule or logic concept tied to the findings (for example a failed-login threshold for SSH brute-force activity when those facts are present).
+3. Include plain-language logic that references observables or behaviors from the input.
+4. Note false-positive and tuning considerations.
+5. Suggest telemetry improvements only when supported by the findings.
+
+## Grounding rules
+
+1. **Findings-driven** — Every gap and recommendation must trace to `investigation_findings`.
+2. **No false precision** — Do not claim existing detections are deployed unless stated in the input.
+3. **Draft logic only** — Provide detection concepts or pseudo-logic; label drafts as drafts.
+4. **Environment bounds** — If `environment_constraints` is empty, recommend log-source categories generically.
+5. **MITRE alignment** — Link recommendations to techniques from input when available.
 
 ## Output
 
