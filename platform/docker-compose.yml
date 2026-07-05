@@ -24,9 +24,17 @@ services:
       context: ./ai-gateway
     container_name: ai-gateway
     restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - DEFAULT_MODEL=tinyllama
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - DEFAULT_PROVIDER=${DEFAULT_PROVIDER:-ollama}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-tinyllama}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     depends_on:
       - ollama
 
