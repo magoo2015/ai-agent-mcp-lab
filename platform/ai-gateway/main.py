@@ -1,5 +1,6 @@
 import os
 import time
+import uuid
 from typing import Optional
 
 import httpx
@@ -8,6 +9,7 @@ from pydantic import BaseModel
 
 from providers.ollama import call_ollama
 from providers.openai_provider import call_openai
+from telemetry import log_request_telemetry
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "ollama")
@@ -27,6 +29,24 @@ class ChatRequest(BaseModel):
     prompt: str
     model: Optional[str] = None
     provider: Optional[str] = None
+
+
+def _resolve_model(provider: str, request_model: Optional[str]) -> str:
+    if request_model:
+        return request_model
+    if provider == "openai":
+        return OPENAI_MODEL
+    return DEFAULT_MODEL
+
+
+def _error_type_for_status(status_code: int, detail: str) -> str:
+    if status_code == 400 and "OPENAI_API_KEY" in detail:
+        return "missing_api_key"
+    if status_code == 400 and "Unsupported provider" in detail:
+        return "unsupported_provider"
+    if status_code == 502:
+        return "upstream_error"
+    return "request_error"
 
 
 @app.get("/health")
@@ -53,36 +73,57 @@ async def models():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    provider = (request.provider or DEFAULT_PROVIDER).lower()
-    if provider not in SUPPORTED_PROVIDERS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported provider '{provider}'. Use one of: {sorted(SUPPORTED_PROVIDERS)}",
-        )
-
-    if provider == "openai":
-        model = request.model or OPENAI_MODEL
-    else:
-        model = request.model or DEFAULT_MODEL
-
+    request_id = str(uuid.uuid4())
     started = time.perf_counter()
-    if provider == "ollama":
-        response_text = await call_ollama(request.prompt, model, OLLAMA_BASE_URL)
-    else:
-        if not OPENAI_API_KEY:
+    provider = (request.provider or DEFAULT_PROVIDER).lower()
+    model = _resolve_model(provider, request.model)
+
+    try:
+        if provider not in SUPPORTED_PROVIDERS:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "OpenAI provider requested but OPENAI_API_KEY is not configured. "
-                    "Set OPENAI_API_KEY in the gateway environment."
-                ),
+                detail=f"Unsupported provider '{provider}'. Use one of: {sorted(SUPPORTED_PROVIDERS)}",
             )
-        response_text = await call_openai(request.prompt, model, OPENAI_API_KEY)
-    latency_ms = int((time.perf_counter() - started) * 1000)
 
-    return {
-        "provider": provider,
-        "model": model,
-        "response": response_text,
-        "latency_ms": latency_ms,
-    }
+        if provider == "ollama":
+            response_text = await call_ollama(request.prompt, model, OLLAMA_BASE_URL)
+        else:
+            if not OPENAI_API_KEY:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "OpenAI provider requested but OPENAI_API_KEY is not configured. "
+                        "Set OPENAI_API_KEY in the gateway environment."
+                    ),
+                )
+            response_text = await call_openai(request.prompt, model, OPENAI_API_KEY)
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        log_request_telemetry(
+            request_id=request_id,
+            provider=provider,
+            model=model,
+            latency_ms=latency_ms,
+            success=True,
+            status_code=200,
+        )
+        return {
+            "request_id": request_id,
+            "provider": provider,
+            "model": model,
+            "response": response_text,
+            "latency_ms": latency_ms,
+        }
+    except HTTPException as exc:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        log_request_telemetry(
+            request_id=request_id,
+            provider=provider,
+            model=model,
+            latency_ms=latency_ms,
+            success=False,
+            status_code=exc.status_code,
+            error_type=_error_type_for_status(exc.status_code, detail),
+        )
+        raise

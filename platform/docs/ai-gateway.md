@@ -30,13 +30,14 @@ Provider-specific HTTP logic lives in `platform/ai-gateway/providers/`, not in `
 ```text
 platform/ai-gateway/
   main.py                 # routing, env, validation, latency, response shape
+  telemetry.py            # safe structured JSON request logging (metadata only)
   providers/
     __init__.py
     ollama.py             # call_ollama(prompt, model, base_url)
     openai_provider.py    # call_openai(prompt, model, api_key)
 ```
 
-`main.py` reads environment variables, validates the request, selects the provider, measures latency, and returns the normalized JSON contract. Each provider module owns only its upstream API call and error translation.
+`main.py` reads environment variables, validates the request, selects the provider, measures latency, emits telemetry, and returns the normalized JSON contract. Each provider module owns only its upstream API call and error translation. `telemetry.py` writes one JSON object per `/chat` request to stdout — metadata only, never prompt or secret content.
 
 This separation keeps the gateway thin at the HTTP layer and makes new backends a matter of adding a module plus a routing branch — without touching Ollama or OpenAI code that already works. Future providers (DeepSeek, Claude, Gemini, Azure OpenAI) would follow the same pattern: implement `call_<provider>(prompt, model, …)` with credentials passed in from `main.py`, register the provider name in routing, and leave the client `/chat` contract unchanged.
 
@@ -82,12 +83,64 @@ Both providers return the same shape:
 
 ```json
 {
+  "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "provider": "ollama",
   "model": "tinyllama",
   "response": "...",
   "latency_ms": 1234
 }
 ```
+
+`request_id` is a UUID generated per request. Clients can correlate gateway responses with container logs using this id.
+
+## Request telemetry
+
+Every `/chat` request emits **one structured JSON line** to stdout (visible via `docker logs ai-gateway`). This is metadata-only observability — not a full request/response audit log.
+
+### Telemetry fields
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `request_id` | string | UUID for this request; matches the `/chat` response |
+| `timestamp_utc` | string | ISO-8601 UTC timestamp when the log line was written |
+| `provider` | string | `ollama` or `openai` |
+| `model` | string | Model id used for the request |
+| `latency_ms` | integer | End-to-end gateway latency for the request |
+| `success` | boolean | `true` if the gateway returned 200; `false` otherwise |
+| `status_code` | integer | HTTP status returned to the client (200, 400, 502, …) |
+| `error_type` | string | Present on failure only — e.g. `missing_api_key`, `unsupported_provider`, `upstream_error` |
+
+Example success log:
+
+```json
+{"request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "timestamp_utc": "2026-07-05T17:22:01.123456+00:00", "provider": "ollama", "model": "tinyllama", "latency_ms": 842, "success": true, "status_code": 200}
+```
+
+Example failure log (missing OpenAI key):
+
+```json
+{"request_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901", "timestamp_utc": "2026-07-05T17:22:05.654321+00:00", "provider": "openai", "model": "gpt-4.1-mini", "latency_ms": 1, "success": false, "status_code": 400, "error_type": "missing_api_key"}
+```
+
+### Why prompts are not logged by default
+
+Security and privacy drive the default:
+
+- **Prompts may contain alerts, PII, or credentials** — SOC workflows often send raw alert JSON or incident details in the prompt. Logging that content duplicates sensitive data into log stores with broader access than the inference path.
+- **API keys must never appear in logs** — `OPENAI_API_KEY` is read from the environment only; telemetry never includes keys, bearer tokens, or upstream auth headers.
+- **Upstream bodies are excluded** — Full Ollama/OpenAI response payloads are not logged; only success/failure metadata and classified `error_type` are recorded.
+
+This is a deliberate **security/privacy tradeoff**: you gain request-level observability (volume, latency, error rates per provider) without building a prompt archive. When deeper debugging is needed, use `request_id` to correlate a client response with logs, then reproduce with a controlled test prompt — or enable optional prompt logging behind an explicit feature flag in a future phase (not v1).
+
+### Path to Prometheus and Grafana
+
+Stdout JSON lines are the first observability layer. A later phase can:
+
+1. **Scrape or ship logs** — Promtail, Fluent Bit, or a sidecar tails `docker logs` and parses JSON.
+2. **Export counters and histograms** — Derive `gateway_requests_total{provider, success}`, `gateway_latency_ms`, and `gateway_errors_total{error_type}` for Prometheus.
+3. **Dashboard in Grafana** — Provider latency comparison, error rate by `error_type`, and SLO panels using the same fields already emitted today.
+
+Because telemetry schema is stable and secret-free, adding metrics does not require changing what clients send or widening the trust boundary.
 
 ## Environment variables
 
@@ -104,7 +157,7 @@ Configure in `platform/.env` (copy from `.env.example`). Docker Compose passes t
 ## Why API keys stay in the gateway
 
 - **Single secret boundary** — Only the gateway container needs `OPENAI_API_KEY`. Browsers, promptfoo configs, and MCP clients send prompts without credentials.
-- **No key leakage in logs** — The gateway does not log the API key. Missing-key errors describe configuration, not secret values.
+- **No key leakage in logs** — The gateway does not log the API key, prompt text, or raw upstream response bodies. Telemetry records metadata only (`request_id`, provider, model, latency, status).
 - **Provider abstraction** — Callers use one JSON contract; switching from local to cloud is a `provider` field, not a client rewrite.
 - **Audit and rate control (future)** — Central routing enables request logging, allowlists, and per-tenant quotas without changing every client.
 
@@ -173,5 +226,5 @@ This gateway demonstrates patterns common in production AI platforms:
 - **Backend-for-frontend / API gateway** — Stable client contract over swappable inference backends.
 - **Secret isolation** — Cloud credentials confined to one service; clients stay credential-free.
 - **Multi-provider routing** — Same API for on-prem (Ollama) and SaaS (OpenAI) with explicit `provider` selection.
-- **Observability hooks** — Normalized responses include `latency_ms` for SLO tracking and cost/latency comparisons across providers.
+- **Observability hooks** — Normalized responses include `request_id` and `latency_ms`; stdout JSON telemetry enables per-request tracing without logging prompts or secrets.
 - **Security engineering mindset** — Fail closed on missing keys, no secret logging, `.env` hygiene, and documentation of trust boundaries.
