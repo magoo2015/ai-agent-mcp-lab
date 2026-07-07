@@ -1,0 +1,30 @@
+{
+  "platform": "wazuh",
+  "alert_type": "ssh_failed_login",
+  "severity": "high",
+  "description": "Multiple SSH authentication failures detected against privileged account root from external source.",
+  "observables": {
+    "source_ip": "203.0.113.45",
+    "destination_ip": "10.0.1.15",
+    "hostname": "prod-web-01",
+    "username": "root"
+  },
+  "raw_event": {
+    "timestamp": "2026-07-07T14:22:00Z",
+    "rule": {
+      "id": "5710",
+      "level": 8,
+      "description": "sshd: authentication failed"
+    },
+    "agent": {
+      "id": "001",
+      "name": "prod-web-01"
+    },
+    "srcip": "203.0.113.45",
+    "user": "root",
+    "decoder": {
+      "name": "sshd"
+    },
+    "full_log": "Failed password for root from 203.0.113.45 port 54422 ssh2"
+  }
+}

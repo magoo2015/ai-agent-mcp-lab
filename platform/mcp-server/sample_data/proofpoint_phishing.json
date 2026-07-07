@@ -1,0 +1,25 @@
+{
+  "platform": "proofpoint",
+  "alert_type": "phishing_email",
+  "severity": "medium",
+  "description": "Phishing email detected with credential-harvesting URL impersonating corporate IT password reset.",
+  "observables": {
+    "sender": "it-support@corp-secure-login.example",
+    "recipient": "analyst@company.com",
+    "url": "https://corp-secure-login.example/reset?token=abc123",
+    "hostname": "mail-gateway-01"
+  },
+  "raw_event": {
+    "GUID": "pp-msg-8842-c1a9",
+    "messageTime": "2026-07-07T11:03:12Z",
+    "threatType": "phish",
+    "threatStatus": "delivered",
+    "sender": "it-support@corp-secure-login.example",
+    "recipient": ["analyst@company.com"],
+    "subject": "Urgent: Password reset required within 1 hour",
+    "urls": [
+      "https://corp-secure-login.example/reset?token=abc123"
+    ],
+    "impostorScore": 78
+  }
+}

