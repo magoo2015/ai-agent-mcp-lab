@@ -5,8 +5,11 @@ from typing import Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
+from starlette.responses import Response
 
+from metrics import record_request_metrics
 from providers.ollama import call_ollama
 from providers.openai_provider import call_openai
 from telemetry import log_request_telemetry
@@ -47,6 +50,11 @@ def _error_type_for_status(status_code: int, detail: str) -> str:
     if status_code == 502:
         return "upstream_error"
     return "request_error"
+
+
+@app.get("/metrics")
+async def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/health")
@@ -107,6 +115,13 @@ async def chat(request: ChatRequest):
             success=True,
             status_code=200,
         )
+        record_request_metrics(
+            provider=provider,
+            model=model,
+            latency_ms=latency_ms,
+            success=True,
+            status_code=200,
+        )
         return {
             "request_id": request_id,
             "provider": provider,
@@ -117,6 +132,7 @@ async def chat(request: ChatRequest):
     except HTTPException as exc:
         latency_ms = int((time.perf_counter() - started) * 1000)
         detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        error_type = _error_type_for_status(exc.status_code, detail)
         log_request_telemetry(
             request_id=request_id,
             provider=provider,
@@ -124,6 +140,14 @@ async def chat(request: ChatRequest):
             latency_ms=latency_ms,
             success=False,
             status_code=exc.status_code,
-            error_type=_error_type_for_status(exc.status_code, detail),
+            error_type=error_type,
+        )
+        record_request_metrics(
+            provider=provider,
+            model=model,
+            latency_ms=latency_ms,
+            success=False,
+            status_code=exc.status_code,
+            error_type=error_type,
         )
         raise

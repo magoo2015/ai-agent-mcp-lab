@@ -31,6 +31,7 @@ Provider-specific HTTP logic lives in `platform/ai-gateway/providers/`, not in `
 platform/ai-gateway/
   main.py                 # routing, env, validation, latency, response shape
   telemetry.py            # safe structured JSON request logging (metadata only)
+  metrics.py              # Prometheus counters/histograms (low-cardinality labels)
   providers/
     __init__.py
     ollama.py             # call_ollama(prompt, model, base_url)
@@ -50,6 +51,7 @@ All generation goes through one endpoint:
 | Endpoint | Method | Description |
 | -------- | ------ | ----------- |
 | `/health` | GET | Gateway status and defaults (no secrets) |
+| `/metrics` | GET | Prometheus exposition format (request counters, latency histogram, errors) |
 | `/models` | GET | Lists models from Ollama `/api/tags` |
 | `/chat` | POST | Generate a response with provider routing |
 
@@ -132,15 +134,91 @@ Security and privacy drive the default:
 
 This is a deliberate **security/privacy tradeoff**: you gain request-level observability (volume, latency, error rates per provider) without building a prompt archive. When deeper debugging is needed, use `request_id` to correlate a client response with logs, then reproduce with a controlled test prompt — or enable optional prompt logging behind an explicit feature flag in a future phase (not v1).
 
-### Path to Prometheus and Grafana
+## Prometheus metrics
 
-Stdout JSON lines are the first observability layer. A later phase can:
+The gateway exposes a **`GET /metrics`** endpoint in [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/). Metrics are updated on every `/chat` request alongside stdout JSON telemetry.
 
-1. **Scrape or ship logs** — Promtail, Fluent Bit, or a sidecar tails `docker logs` and parses JSON.
-2. **Export counters and histograms** — Derive `gateway_requests_total{provider, success}`, `gateway_latency_ms`, and `gateway_errors_total{error_type}` for Prometheus.
-3. **Dashboard in Grafana** — Provider latency comparison, error rate by `error_type`, and SLO panels using the same fields already emitted today.
+### Metric names
 
-Because telemetry schema is stable and secret-free, adding metrics does not require changing what clients send or widening the trust boundary.
+| Metric | Type | Labels | Description |
+| ------ | ---- | ------ | ----------- |
+| `ai_gateway_requests_total` | Counter | `provider`, `model`, `status` | Total `/chat` requests by HTTP status code |
+| `ai_gateway_request_latency_seconds` | Histogram | `provider`, `model` | End-to-end gateway latency in seconds |
+| `ai_gateway_errors_total` | Counter | `provider`, `model`, `error_type` | Failed requests by classified error type |
+
+Example series after traffic:
+
+```text
+ai_gateway_requests_total{provider="ollama",model="tinyllama",status="200"} 3
+ai_gateway_request_latency_seconds_bucket{provider="ollama",model="tinyllama",le="1.0"} 2
+ai_gateway_errors_total{provider="openai",model="gpt-4.1-mini",error_type="missing_api_key"} 1
+```
+
+### Label choices (low cardinality)
+
+Labels are limited to values with a **small, bounded set** of possible values:
+
+| Label | Values | Why |
+| ----- | ------ | --- |
+| `provider` | `ollama`, `openai` | Fixed provider registry |
+| `model` | e.g. `tinyllama`, `gpt-4.1-mini` | Small set of configured models — not free-form user input as unbounded labels |
+| `status` | HTTP status codes (`200`, `400`, `502`, …) | Bounded set of gateway response codes |
+| `error_type` | `missing_api_key`, `unsupported_provider`, `upstream_error`, `request_error` | Classified error buckets from `_error_type_for_status()` |
+
+### Why prompts and request_ids are not labels
+
+Prometheus labels become **time-series dimensions**. Every unique label combination creates a new series. High-cardinality labels cause:
+
+- **Memory explosion** in Prometheus TSDB
+- **Slow queries** and dashboard timeouts
+- **Privacy leakage** — prompts may contain alert text, PII, or credentials; `request_id` is per-request and would create one series per call
+
+Prompts belong in optional, gated audit logs (future), not in metrics. Per-request correlation uses `request_id` in **JSON telemetry** and the `/chat` response body — not Prometheus labels.
+
+### Path to Grafana dashboards
+
+With Prometheus scraping `ai-gateway:8000` (see [`prometheus/prometheus.yml`](../prometheus/prometheus.yml)), Grafana can visualize:
+
+- **Request rate** — `rate(ai_gateway_requests_total[5m])` by `provider`
+- **Error rate** — `rate(ai_gateway_errors_total[5m])` by `error_type`
+- **Latency percentiles** — `histogram_quantile(0.95, rate(ai_gateway_request_latency_seconds_bucket[5m]))` by `provider`
+- **SLO panels** — success ratio: requests with `status="200"` vs total
+
+Stdout JSON telemetry remains useful for **per-request drill-down** (find a `request_id`, check logs); Prometheus metrics power **aggregated SRE dashboards** and future alerting.
+
+### Security / privacy tradeoffs
+
+| Approach | Benefit | Cost |
+| -------- | ------- | ---- |
+| Metadata-only metrics | Safe to scrape, store, and share with SRE | No per-prompt visibility |
+| Low-cardinality labels | Stable Prometheus performance | Cannot slice by user, IP, or alert ID |
+| No auth on `/metrics` (v1) | Simple lab setup | Endpoint should not be public in production |
+
+Authentication for `/metrics` is deferred to a later phase. In production, restrict scrape to the internal Docker network or protect with network policy / reverse-proxy auth.
+
+### Testing metrics
+
+```bash
+curl -s http://localhost:8000/metrics | grep ai_gateway
+```
+
+Generate traffic first (see [Testing Ollama](#testing-ollama) and [Testing OpenAI later](#testing-openai-later)).
+
+Verify Prometheus scrape (from a host with access to the Prometheus API, or via `docker exec`):
+
+```bash
+docker exec prometheus wget -qO- http://localhost:9090/api/v1/targets | grep ai-gateway
+```
+
+### Path to Prometheus and Grafana (telemetry → metrics)
+
+Stdout JSON lines are the first observability layer; **Prometheus metrics (v1)** add the second:
+
+1. ~~**Export counters and histograms**~~ — `GET /metrics` on the gateway; Prometheus scrapes `ai-gateway:8000`.
+2. **Dashboard in Grafana** — Provider latency comparison, error rate by `error_type`, and SLO panels using PromQL over the series above.
+3. **Optional log shipping** — Promtail or Fluent Bit can still tail stdout JSON for per-request `request_id` correlation.
+
+Because the metrics schema is stable and secret-free, adding dashboards does not require changing what clients send or widening the trust boundary.
 
 ## Environment variables
 
@@ -226,5 +304,5 @@ This gateway demonstrates patterns common in production AI platforms:
 - **Backend-for-frontend / API gateway** — Stable client contract over swappable inference backends.
 - **Secret isolation** — Cloud credentials confined to one service; clients stay credential-free.
 - **Multi-provider routing** — Same API for on-prem (Ollama) and SaaS (OpenAI) with explicit `provider` selection.
-- **Observability hooks** — Normalized responses include `request_id` and `latency_ms`; stdout JSON telemetry enables per-request tracing without logging prompts or secrets.
+- **Observability hooks** — Normalized responses include `request_id` and `latency_ms`; stdout JSON telemetry enables per-request tracing without logging prompts or secrets; Prometheus metrics expose aggregated counters and latency histograms for SRE dashboards.
 - **Security engineering mindset** — Fail closed on missing keys, no secret logging, `.env` hygiene, and documentation of trust boundaries.

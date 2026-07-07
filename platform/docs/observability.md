@@ -25,6 +25,7 @@ Prometheus pulls metrics from configured targets on a schedule (15-second interv
 - Itself (`localhost:9090` inside the container)
 - Node Exporter (`node-exporter:9100`)
 - cAdvisor (`cadvisor:8080`)
+- AI Gateway (`ai-gateway:8000`) — application metrics for `/chat` requests
 
 Prometheus runs on the internal Docker network only—it is **not** published on a host port. Other containers (including Grafana) reach it at `http://prometheus:9090`.
 
@@ -53,6 +54,35 @@ Node Exporter is internal-only; it is not exposed on a host port.
 cAdvisor inspects Docker cgroups and container runtime state to expose per-container CPU, memory, filesystem, and network usage. Use it to see which services (Ollama, Open WebUI, Nginx, Prometheus, etc.) consume resources and to spot leaks or runaway processes.
 
 cAdvisor is internal-only; it is not exposed on a host port.
+
+### AI Gateway metrics
+
+**Purpose:** Application-level metrics for LLM routing through the gateway.
+
+The AI Gateway exposes `GET /metrics` in Prometheus text format. Each `/chat` request increments counters and observes latency histograms with **low-cardinality labels only** (`provider`, `model`, `status`, `error_type`). Prompts, `request_id`, client IPs, and API keys are never included in metric labels.
+
+| Metric | Type | Labels |
+| ------ | ---- | ------ |
+| `ai_gateway_requests_total` | Counter | `provider`, `model`, `status` |
+| `ai_gateway_request_latency_seconds` | Histogram | `provider`, `model` |
+| `ai_gateway_errors_total` | Counter | `provider`, `model`, `error_type` |
+
+Scrape job: `ai-gateway` → `ai-gateway:8000` in [`prometheus/prometheus.yml`](../prometheus/prometheus.yml).
+
+**Example PromQL queries:**
+
+```promql
+# Request rate by provider (5m window)
+sum by (provider) (rate(ai_gateway_requests_total[5m]))
+
+# p95 latency by provider
+histogram_quantile(0.95, sum by (provider, le) (rate(ai_gateway_request_latency_seconds_bucket[5m])))
+
+# Error rate by type
+sum by (error_type) (rate(ai_gateway_errors_total[5m]))
+```
+
+See [ai-gateway.md](./ai-gateway.md#prometheus-metrics) for label rationale, security tradeoffs, and why prompts are excluded from metrics.
 
 ## Access Grafana
 
@@ -101,8 +131,11 @@ Import community dashboards from [grafana.com/grafana/dashboards](https://grafan
 | --------- | -------------- | ------- |
 | **Node Exporter Full** | [1860](https://grafana.com/grafana/dashboards/1860) | Host CPU, memory, disk, network, and load on the VPS |
 | **Docker / cAdvisor** | [14282](https://grafana.com/grafana/dashboards/14282) (or search "cAdvisor") | Per-container CPU, memory, and I/O for Docker services |
+| **AI Gateway (custom)** | Build your own | Request rate, error rate, and latency percentiles from `ai_gateway_*` metrics |
 
 When importing, select your Prometheus data source. Adjust panel time ranges and refresh intervals (e.g. 30s or 1m) for live operations.
+
+For the AI Gateway, create panels using the PromQL examples in [AI Gateway metrics](#ai-gateway-metrics) above — e.g. `rate(ai_gateway_requests_total[5m])` and `histogram_quantile(0.95, ...)`.
 
 ## Useful Commands
 
@@ -130,6 +163,18 @@ docker logs prometheus --tail 50
 
 ```bash
 docker logs grafana --tail 50
+```
+
+**AI Gateway metrics (direct from gateway host port):**
+
+```bash
+curl -s http://localhost:8000/metrics | grep ai_gateway
+```
+
+**Prometheus targets (from inside the Prometheus container):**
+
+```bash
+docker exec prometheus wget -qO- http://localhost:9090/api/v1/targets | grep ai-gateway
 ```
 
 **All observability service logs:**

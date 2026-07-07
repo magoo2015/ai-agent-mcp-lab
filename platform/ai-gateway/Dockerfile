@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py telemetry.py .
+COPY main.py telemetry.py metrics.py .
 COPY providers/ providers/
 
 EXPOSE 8000
