@@ -41,6 +41,27 @@ Confidence scores and MITRE mappings are **conservative by design** — the fram
 
 ## Quick start
 
+### Docker (recommended — no host Python packages)
+
+```bash
+cd platform
+
+docker compose --profile mcp run --rm mcp-server python main.py sample_data/ssh_failed_login.json
+
+docker compose --profile mcp run --rm mcp-server python main.py sample_data/defender_suspicious_process.json
+
+docker compose --profile mcp run --rm mcp-server python main.py sample_data/proofpoint_phishing.json
+```
+
+Build the image explicitly (optional):
+
+```bash
+cd platform
+docker compose --profile mcp build mcp-server
+```
+
+### Local Python (optional)
+
 ```bash
 cd platform/mcp-server
 python3 -m venv .venv

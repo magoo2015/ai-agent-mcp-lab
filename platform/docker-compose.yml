@@ -104,6 +104,12 @@ services:
     mem_limit: 512m
     cpus: "0.50"
 
+  mcp-server:
+    profiles: ["mcp"]
+    build:
+      context: ./mcp-server
+    working_dir: /app
+
 volumes:
   ollama:
     external: true
