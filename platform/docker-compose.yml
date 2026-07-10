@@ -109,6 +109,10 @@ services:
     build:
       context: ./mcp-server
     working_dir: /app
+    # Stdio MCP transport — no published ports. Use:
+    #   docker compose --profile mcp run --rm -i mcp-server python mcp_server.py
+    stdin_open: true
+    tty: false
 
 volumes:
   ollama:
