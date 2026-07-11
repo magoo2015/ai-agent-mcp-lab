@@ -35,17 +35,20 @@ Open WebUI provides a browser-based chat interface connected to Ollama. It is re
 
 ### AI Gateway
 
-A lightweight FastAPI service (`platform/ai-gateway/`) that proxies requests to Ollama. It is internal-only, exposed through Nginx at `/gateway/`, and part of the **`ai` profile**. If ai-gateway is not running, Nginx still serves `/gateway/` but returns **502 Bad Gateway**. Endpoints:
+A lightweight FastAPI service (`platform/ai-gateway/`) that routes requests to Ollama or OpenAI. It is **internal-only** on the Docker network (no host port **8000** published). External access is only through Nginx at `/gateway/`. Part of the **`ai` profile**. If ai-gateway is not running, Nginx still serves `/gateway/` but returns **502 Bad Gateway**.
 
-- `GET /health` — service status
+Endpoints:
+
+- `GET /health` — service status (unauthenticated; safe for ops probes)
+- `GET /metrics` — Prometheus scrape target (**internal only**; not proxied by Nginx)
 - `GET /models` — available models (Ollama `/api/tags`)
-- `POST /chat` — non-streaming generation (`prompt` required; `model` optional, defaults to `DEFAULT_MODEL`)
+- `POST /chat` — non-streaming generation; requires `X-API-Key`; prompt/body size limited
 
-This layer is the foundation for future model routing, request logging, promptfoo evaluation, garak security probes, and MCP integration.
+Hardening v1 adds a shared gateway API key, request-size limits, and removal of direct host exposure. Traffic is still **HTTP** (TLS is a later phase). See [ai-gateway.md](./ai-gateway.md).
 
 ### Nginx
 
-Nginx acts as the reverse proxy and single public entry point for the AI chat stack. It listens on port 80 and forwards `/` to Open WebUI and `/gateway/` to the AI Gateway on the Docker network. Nginx depends only on Open WebUI at startup so the core stack can run without the `ai` profile.
+Nginx acts as the reverse proxy and **sole public entry point** for the AI chat stack and gateway API. It listens on port 80 and forwards `/` to Open WebUI and `/gateway/` to the AI Gateway on the Docker network. The `/gateway/` location forwards `X-API-Key` and sets `client_max_body_size 64k`. Nginx does **not** expose `/metrics`. Nginx depends only on Open WebUI at startup so the core stack can run without the `ai` profile.
 
 ### Observability
 
@@ -77,12 +80,13 @@ The repository root contains `scripts/soc_mcp_server.py`, a Python FastMCP serve
 │  │ (public)     │     │ :8080 int.   │     │ :11434 int.  │     │ gemma2:2b│ │
 │  └──────┬───────┘     └──────────────┘     └──────────────┘     └──────────┘ │
 │         │                                                                   │
-│         │ /gateway/                                                         │
+│         │ /gateway/  (X-API-Key for /chat)                                  │
 │         ▼                                                                   │
-│  ┌──────────────┐                                                           │
-│  │ AI Gateway   │──────────────────────────────────────────▶ Ollama        │
-│  │ :8000 int.   │                                                           │
-│  └──────────────┘                                                           │
+│  ┌────────────────┐   scrape /metrics (Docker net)   ┌─────────────┐       │
+│  │ AI Gateway     │◀─────────────────────────────────│ Prometheus  │       │
+│  │ :8000 internal │─────────────────────────────────▶│ (TSDB)      │       │
+│  │ (no host :8000)│──────────────▶ Ollama            └─────────────┘       │
+│  └────────────────┘                                                         │
 │                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
 │  │ Observability (internal scrape path)                                  │  │
@@ -119,16 +123,18 @@ tinyllama / gemma2:2b (user-selected in Open WebUI)
 ### AI Gateway path
 
 ```text
-Client (browser, curl, promptfoo, garak)
-    ↓
+Client (curl, automation)
+    ↓  X-API-Key required for POST /chat
 Nginx :80 /gateway/
     ↓
-AI Gateway :8000 (internal)
+AI Gateway :8000 (Docker network only — host port 8000 not published)
     ↓
-Ollama :11434 (internal)
+Ollama :11434 (internal)  or  OpenAI (HTTPS)
     ↓
-tinyllama (default) or explicit model override (e.g. gemma2:2b)
+tinyllama (default) or explicit model override
 ```
+
+`GET /health` remains unauthenticated for liveness. `GET /metrics` is scraped by Prometheus at `http://ai-gateway:8000/metrics` and is **not** available through Nginx.
 
 ### Observability path
 
@@ -144,4 +150,4 @@ Prometheus (internal)
     └── Prometheus :9090 (self-monitoring)
 ```
 
-Ollama, Open WebUI, and the AI Gateway are not published on public host ports. Nginx exposes port 80 for the chat UI and gateway API; Grafana exposes port 3001 for metrics dashboards.
+Ollama, Open WebUI, and the AI Gateway are not published on public host ports. Nginx exposes port 80 for the chat UI and gateway API; Grafana exposes port 3001 for metrics dashboards. Gateway `/metrics` stays on the internal Docker network for Prometheus only.

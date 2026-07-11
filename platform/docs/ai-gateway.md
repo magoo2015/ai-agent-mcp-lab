@@ -4,13 +4,36 @@ The AI Gateway is a lightweight FastAPI service that sits between platform clien
 
 For broader platform context, see [architecture.md](./architecture.md). For prompt regression testing through the gateway, see [promptfoo.md](./promptfoo.md).
 
+## Trust boundary (Hardening v1)
+
+```text
+Public / lab host
+    │
+    ▼
+Nginx :80  ──►  /gateway/*  (only public path to the gateway)
+    │
+    ▼
+AI Gateway :8000  (Docker network only — no host port published)
+    │
+    ├── GET  /health   — unauthenticated (liveness for ops / Nginx checks)
+    ├── GET  /metrics  — unauthenticated, internal scrape only (not proxied by Nginx)
+    └── POST /chat     — requires X-API-Key; size-limited
+```
+
+**Nginx is the only host entry point** for the gateway. Direct host access to port **8000** was removed so the gateway is not reachable from the public internet without going through Nginx. Prometheus continues to scrape `http://ai-gateway:8000/metrics` on the Docker network.
+
+This is **lab hardening**, not a full production security posture. Traffic remains **HTTP** until a later TLS phase. There is no separate auth service, no Redis session store, and no database-backed identity.
+
 ## Architecture
 
 ```text
-Client (curl, promptfoo, MCP tool, automation)
+Client (curl, automation)
+    │  X-API-Key (required for /chat)
+    ▼
+Nginx :80 /gateway/
     │
     ▼
-POST /chat  ──►  AI Gateway (:8000)
+POST /chat  ──►  AI Gateway (:8000, internal)
                     │
         ┌───────────┴───────────┐
         ▼                       ▼
@@ -21,7 +44,7 @@ POST /chat  ──►  AI Gateway (:8000)
  (local, Docker network)  (HTTPS, bearer token)
 ```
 
-Clients never call Ollama or OpenAI directly. Nginx can expose the gateway at `/gateway/` on port 80; during development the gateway also publishes host port **8000** for direct testing.
+Clients never call Ollama or OpenAI directly. External callers use `http://<host>/gateway/...` only.
 
 ## Provider abstraction
 
@@ -29,7 +52,7 @@ Provider-specific HTTP logic lives in `platform/ai-gateway/providers/`, not in `
 
 ```text
 platform/ai-gateway/
-  main.py                 # routing, env, validation, latency, response shape
+  main.py                 # routing, auth, limits, validation, latency, response shape
   telemetry.py            # safe structured JSON request logging (metadata only)
   metrics.py              # Prometheus counters/histograms (low-cardinality labels)
   providers/
@@ -38,22 +61,66 @@ platform/ai-gateway/
     openai_provider.py    # call_openai(prompt, model, api_key)
 ```
 
-`main.py` reads environment variables, validates the request, selects the provider, measures latency, emits telemetry, and returns the normalized JSON contract. Each provider module owns only its upstream API call and error translation. `telemetry.py` writes one JSON object per `/chat` request to stdout — metadata only, never prompt or secret content.
+`main.py` reads environment variables, enforces gateway API-key auth on `/chat`, applies prompt/body limits, selects the provider, measures latency, emits telemetry, and returns the normalized JSON contract. Each provider module owns only its upstream API call and error translation. `telemetry.py` writes one JSON object per `/chat` request to stdout — metadata only, never prompt or secret content.
 
-This separation keeps the gateway thin at the HTTP layer and makes new backends a matter of adding a module plus a routing branch — without touching Ollama or OpenAI code that already works. Future providers (DeepSeek, Claude, Gemini, Azure OpenAI) would follow the same pattern: implement `call_<provider>(prompt, model, …)` with credentials passed in from `main.py`, register the provider name in routing, and leave the client `/chat` contract unchanged.
+Secrets remain environment-only: `GATEWAY_API_KEY` and `OPENAI_API_KEY` are read from the container env. Provider modules never log keys or read `.env` files directly.
 
-Secrets remain environment-only: `main.py` reads `OPENAI_API_KEY` from the container env and passes it into `call_openai`; provider modules never log keys or read `.env` files directly.
+## Access control
+
+| Endpoint | Auth | Exposure |
+| -------- | ---- | -------- |
+| `GET /health` | None | Via Nginx `/gateway/health` (public on port 80 in this lab) |
+| `GET /metrics` | None | **Internal Docker network only** — not proxied by Nginx |
+| `POST /chat` | `X-API-Key` header | Via Nginx `/gateway/chat` |
+| `GET /models` | None (lab) | Via Nginx `/gateway/models` |
+
+### Why `/health` is public
+
+Liveness checks and simple ops probes should work without distributing the gateway key. `/health` returns only status and default provider/model names — never secrets.
+
+### Why `/metrics` is internal only
+
+Prometheus scrapes `ai-gateway:8000` on the Docker network. Nginx does **not** expose `/metrics`. Leaving scrape unauthenticated is acceptable for this lab because the port is not published on the host; production would add network policy or scrape auth later.
+
+### `X-API-Key` behavior for `POST /chat`
+
+| Condition | HTTP status |
+| --------- | ----------- |
+| Missing `X-API-Key` header | **401** |
+| Invalid `X-API-Key` | **403** |
+| `GATEWAY_API_KEY` unset in gateway env | **503** (fail closed) |
+
+Validation uses constant-time comparison (`secrets.compare_digest`). The configured key is never logged, returned in responses, included in telemetry, or exposed via `/health` or `/metrics`.
+
+```bash
+curl -s http://localhost/gateway/chat \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <your-local-gateway-key>" \
+  -d '{"provider":"ollama","model":"tinyllama","prompt":"Hello"}'
+```
+
+## Request limits
+
+| Variable | Default | Effect |
+| -------- | ------- | ------ |
+| `MAX_PROMPT_CHARS` | `12000` | Reject prompts longer than this (HTTP **413**) |
+| `MAX_REQUEST_BYTES` | `65536` | Reject bodies larger than this via middleware (HTTP **413**) |
+
+Additional prompt rules:
+
+- Empty / whitespace-only prompts → HTTP **422**
+- Nginx `client_max_body_size 64k` on `/gateway/` aligns with the gateway byte limit
+
+Rejected oversized bodies are not logged; telemetry records metadata and a classified `error_type` only.
 
 ## Provider routing
-
-All generation goes through one endpoint:
 
 | Endpoint | Method | Description |
 | -------- | ------ | ----------- |
 | `/health` | GET | Gateway status and defaults (no secrets) |
-| `/metrics` | GET | Prometheus exposition format (request counters, latency histogram, errors) |
+| `/metrics` | GET | Prometheus exposition format (internal scrape) |
 | `/models` | GET | Lists models from Ollama `/api/tags` |
-| `/chat` | POST | Generate a response with provider routing |
+| `/chat` | POST | Generate a response with provider routing (API key required) |
 
 ### Request body
 
@@ -65,23 +132,13 @@ All generation goes through one endpoint:
 }
 ```
 
-```json
-{
-  "prompt": "Summarize this alert...",
-  "model": "gpt-4.1-mini",
-  "provider": "openai"
-}
-```
-
 | Field | Required | Default | Notes |
 | ----- | -------- | ------- | ----- |
-| `prompt` | yes | — | User or system prompt text |
+| `prompt` | yes | — | Non-empty; max `MAX_PROMPT_CHARS` |
 | `provider` | no | `DEFAULT_PROVIDER` (`ollama`) | `ollama` or `openai` |
 | `model` | no | `DEFAULT_MODEL` (Ollama) or `OPENAI_MODEL` (OpenAI) | Provider-specific model id |
 
 ### Normalized response
-
-Both providers return the same shape:
 
 ```json
 {
@@ -93,24 +150,36 @@ Both providers return the same shape:
 }
 ```
 
-`request_id` is a UUID generated per request. Clients can correlate gateway responses with container logs using this id.
-
 ## Request telemetry
 
-Every `/chat` request emits **one structured JSON line** to stdout (visible via `docker logs ai-gateway`). This is metadata-only observability — not a full request/response audit log.
+Every `/chat` request (including auth and validation failures) emits **one structured JSON line** to stdout (visible via `docker logs ai-gateway`). Metadata only — not a full request/response audit log.
 
 ### Telemetry fields
 
 | Field | Type | Description |
 | ----- | ---- | ----------- |
-| `request_id` | string | UUID for this request; matches the `/chat` response |
-| `timestamp_utc` | string | ISO-8601 UTC timestamp when the log line was written |
-| `provider` | string | `ollama` or `openai` |
-| `model` | string | Model id used for the request |
-| `latency_ms` | integer | End-to-end gateway latency for the request |
-| `success` | boolean | `true` if the gateway returned 200; `false` otherwise |
-| `status_code` | integer | HTTP status returned to the client (200, 400, 502, …) |
-| `error_type` | string | Present on failure only — e.g. `missing_api_key`, `unsupported_provider`, `upstream_error` |
+| `request_id` | string | UUID for this request |
+| `timestamp_utc` | string | ISO-8601 UTC timestamp |
+| `provider` | string | `ollama`, `openai`, or `unknown` (pre-parse rejections) |
+| `model` | string | Model id or `unknown` |
+| `latency_ms` | integer | End-to-end gateway latency |
+| `success` | boolean | `true` if HTTP 200 |
+| `status_code` | integer | HTTP status returned |
+| `error_type` | string | Present on failure only |
+
+Classified `error_type` values (Hardening v1):
+
+| `error_type` | When |
+| ------------ | ---- |
+| `missing_gateway_api_key` | No `X-API-Key` header |
+| `invalid_gateway_api_key` | Wrong key |
+| `gateway_api_key_not_configured` | Env key unset (503) |
+| `empty_prompt` | Blank prompt |
+| `prompt_too_large` | Prompt over `MAX_PROMPT_CHARS` |
+| `request_body_too_large` | Body over `MAX_REQUEST_BYTES` |
+| `missing_api_key` | OpenAI provider without `OPENAI_API_KEY` |
+| `unsupported_provider` | Unknown provider name |
+| `upstream_error` | Ollama/OpenAI upstream failure |
 
 Example success log:
 
@@ -118,191 +187,121 @@ Example success log:
 {"request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "timestamp_utc": "2026-07-05T17:22:01.123456+00:00", "provider": "ollama", "model": "tinyllama", "latency_ms": 842, "success": true, "status_code": 200}
 ```
 
-Example failure log (missing OpenAI key):
+Example auth failure (no key value present):
 
 ```json
-{"request_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901", "timestamp_utc": "2026-07-05T17:22:05.654321+00:00", "provider": "openai", "model": "gpt-4.1-mini", "latency_ms": 1, "success": false, "status_code": 400, "error_type": "missing_api_key"}
+{"request_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901", "timestamp_utc": "2026-07-05T17:22:05.654321+00:00", "provider": "ollama", "model": "tinyllama", "latency_ms": 1, "success": false, "status_code": 401, "error_type": "missing_gateway_api_key"}
 ```
 
-### Why prompts are not logged by default
+### Why API keys and prompts are not logged
 
-Security and privacy drive the default:
-
-- **Prompts may contain alerts, PII, or credentials** — SOC workflows often send raw alert JSON or incident details in the prompt. Logging that content duplicates sensitive data into log stores with broader access than the inference path.
-- **API keys must never appear in logs** — `OPENAI_API_KEY` is read from the environment only; telemetry never includes keys, bearer tokens, or upstream auth headers.
-- **Upstream bodies are excluded** — Full Ollama/OpenAI response payloads are not logged; only success/failure metadata and classified `error_type` are recorded.
-
-This is a deliberate **security/privacy tradeoff**: you gain request-level observability (volume, latency, error rates per provider) without building a prompt archive. When deeper debugging is needed, use `request_id` to correlate a client response with logs, then reproduce with a controlled test prompt — or enable optional prompt logging behind an explicit feature flag in a future phase (not v1).
+- **Prompts may contain alerts, PII, or credentials** — logging them duplicates sensitive data into broader log stores.
+- **Gateway and OpenAI keys must never appear in logs** — keys are env-only; telemetry never includes header values or bearer tokens.
+- **Rejected bodies are not logged** — size rejections record `error_type` only.
 
 ## Prometheus metrics
 
-The gateway exposes a **`GET /metrics`** endpoint in [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/). Metrics are updated on every `/chat` request alongside stdout JSON telemetry.
+`GET /metrics` remains on the gateway for internal scrape. Metrics update on every `/chat` attempt alongside stdout JSON telemetry.
 
-### Metric names
+| Metric | Type | Labels |
+| ------ | ---- | ------ |
+| `ai_gateway_requests_total` | Counter | `provider`, `model`, `status` |
+| `ai_gateway_request_latency_seconds` | Histogram | `provider`, `model` |
+| `ai_gateway_errors_total` | Counter | `provider`, `model`, `error_type` |
 
-| Metric | Type | Labels | Description |
-| ------ | ---- | ------ | ----------- |
-| `ai_gateway_requests_total` | Counter | `provider`, `model`, `status` | Total `/chat` requests by HTTP status code |
-| `ai_gateway_request_latency_seconds` | Histogram | `provider`, `model` | End-to-end gateway latency in seconds |
-| `ai_gateway_errors_total` | Counter | `provider`, `model`, `error_type` | Failed requests by classified error type |
+### Testing metrics (internal)
 
-Example series after traffic:
-
-```text
-ai_gateway_requests_total{provider="ollama",model="tinyllama",status="200"} 3
-ai_gateway_request_latency_seconds_bucket{provider="ollama",model="tinyllama",le="1.0"} 2
-ai_gateway_errors_total{provider="openai",model="gpt-4.1-mini",error_type="missing_api_key"} 1
-```
-
-### Label choices (low cardinality)
-
-Labels are limited to values with a **small, bounded set** of possible values:
-
-| Label | Values | Why |
-| ----- | ------ | --- |
-| `provider` | `ollama`, `openai` | Fixed provider registry |
-| `model` | e.g. `tinyllama`, `gpt-4.1-mini` | Small set of configured models — not free-form user input as unbounded labels |
-| `status` | HTTP status codes (`200`, `400`, `502`, …) | Bounded set of gateway response codes |
-| `error_type` | `missing_api_key`, `unsupported_provider`, `upstream_error`, `request_error` | Classified error buckets from `_error_type_for_status()` |
-
-### Why prompts and request_ids are not labels
-
-Prometheus labels become **time-series dimensions**. Every unique label combination creates a new series. High-cardinality labels cause:
-
-- **Memory explosion** in Prometheus TSDB
-- **Slow queries** and dashboard timeouts
-- **Privacy leakage** — prompts may contain alert text, PII, or credentials; `request_id` is per-request and would create one series per call
-
-Prompts belong in optional, gated audit logs (future), not in metrics. Per-request correlation uses `request_id` in **JSON telemetry** and the `/chat` response body — not Prometheus labels.
-
-### Path to Grafana dashboards
-
-With Prometheus scraping `ai-gateway:8000` (see [`prometheus/prometheus.yml`](../prometheus/prometheus.yml)), Grafana can visualize:
-
-- **Request rate** — `rate(ai_gateway_requests_total[5m])` by `provider`
-- **Error rate** — `rate(ai_gateway_errors_total[5m])` by `error_type`
-- **Latency percentiles** — `histogram_quantile(0.95, rate(ai_gateway_request_latency_seconds_bucket[5m]))` by `provider`
-- **SLO panels** — success ratio: requests with `status="200"` vs total
-
-Stdout JSON telemetry remains useful for **per-request drill-down** (find a `request_id`, check logs); Prometheus metrics power **aggregated SRE dashboards** and future alerting.
-
-### Security / privacy tradeoffs
-
-| Approach | Benefit | Cost |
-| -------- | ------- | ---- |
-| Metadata-only metrics | Safe to scrape, store, and share with SRE | No per-prompt visibility |
-| Low-cardinality labels | Stable Prometheus performance | Cannot slice by user, IP, or alert ID |
-| No auth on `/metrics` (v1) | Simple lab setup | Endpoint should not be public in production |
-
-Authentication for `/metrics` is deferred to a later phase. In production, restrict scrape to the internal Docker network or protect with network policy / reverse-proxy auth.
-
-### Testing metrics
-
-```bash
-curl -s http://localhost:8000/metrics | grep ai_gateway
-```
-
-Generate traffic first (see [Testing Ollama](#testing-ollama) and [Testing OpenAI later](#testing-openai-later)).
-
-Verify Prometheus scrape (from a host with access to the Prometheus API, or via `docker exec`):
+Prometheus scrapes `http://ai-gateway:8000/metrics` on the Docker network. Confirm via target health / PromQL (some Prometheus image `wget` builds mishandle `hostname:port`):
 
 ```bash
 docker exec prometheus wget -qO- http://localhost:9090/api/v1/targets | grep ai-gateway
+docker exec prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=ai_gateway_requests_total'
 ```
 
-### Path to Prometheus and Grafana (telemetry → metrics)
-
-Stdout JSON lines are the first observability layer; **Prometheus metrics (v1)** add the second:
-
-1. ~~**Export counters and histograms**~~ — `GET /metrics` on the gateway; Prometheus scrapes `ai-gateway:8000`.
-2. **Dashboard in Grafana** — Provider latency comparison, error rate by `error_type`, and SLO panels using PromQL over the series above.
-3. **Optional log shipping** — Promtail or Fluent Bit can still tail stdout JSON for per-request `request_id` correlation.
-
-Because the metrics schema is stable and secret-free, adding dashboards does not require changing what clients send or widening the trust boundary.
+Do **not** expect `http://localhost:8000/metrics` to work — host port 8000 is closed.
 
 ## Environment variables
 
-Configure in `platform/.env` (copy from `.env.example`). Docker Compose passes these into the `ai-gateway` container via `env_file` and `environment` interpolation.
+Configure in `platform/.env` (copy from `.env.example`). Never commit real keys.
 
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama API base URL inside Docker |
 | `DEFAULT_PROVIDER` | `ollama` | Provider when request omits `provider` |
 | `DEFAULT_MODEL` | `tinyllama` | Ollama model when request omits `model` |
-| `OPENAI_MODEL` | `gpt-4.1-mini` | OpenAI model when `provider=openai` and request omits `model` |
-| `OPENAI_API_KEY` | *(unset)* | Bearer token for OpenAI; **never commit** |
+| `OPENAI_MODEL` | `gpt-4.1-mini` | OpenAI model default |
+| `OPENAI_API_KEY` | *(unset)* | OpenAI bearer token; **never commit** |
+| `GATEWAY_API_KEY` | *(unset)* | Required for `/chat`; fail closed if missing |
+| `MAX_PROMPT_CHARS` | `12000` | Max prompt length |
+| `MAX_REQUEST_BYTES` | `65536` | Max raw request body size |
 
 ## Why API keys stay in the gateway
 
-- **Single secret boundary** — Only the gateway container needs `OPENAI_API_KEY`. Browsers, promptfoo configs, and MCP clients send prompts without credentials.
-- **No key leakage in logs** — The gateway does not log the API key, prompt text, or raw upstream response bodies. Telemetry records metadata only (`request_id`, provider, model, latency, status).
-- **Provider abstraction** — Callers use one JSON contract; switching from local to cloud is a `provider` field, not a client rewrite.
-- **Audit and rate control (future)** — Central routing enables request logging, allowlists, and per-tenant quotas without changing every client.
+- **Single secret boundary** — Only the gateway needs `OPENAI_API_KEY` and `GATEWAY_API_KEY`.
+- **No key leakage in logs** — Telemetry records metadata only.
+- **Provider abstraction** — Callers use one JSON contract.
+- **Fail closed** — Missing gateway key returns 503 for `/chat` rather than open access.
 
-OpenAI integration uses the [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses) (`POST /v1/responses`) rather than legacy Chat Completions, matching OpenAI’s current recommended path for new integrations.
-
-## Testing Ollama
+## Testing (via Nginx)
 
 Start the AI profile:
 
 ```bash
 cd platform
 ./scripts/start-ai.sh
+# or: docker compose --profile ai up -d --build ai-gateway nginx prometheus
 ```
 
-Health check:
+Ensure `platform/.env` contains a local `GATEWAY_API_KEY` (not committed).
+
+Health (no key):
 
 ```bash
-curl -s http://localhost:8000/health
+curl -i http://localhost/gateway/health
 ```
 
-Chat via local Ollama:
+Chat without key → **401**:
 
 ```bash
-curl -s http://localhost:8000/chat \
+curl -i http://localhost/gateway/chat \
   -H "Content-Type: application/json" \
-  -d '{"provider":"ollama","model":"tinyllama","prompt":"Say only: gateway ollama ok"}'
+  -d '{"provider":"ollama","model":"tinyllama","prompt":"test"}'
 ```
 
-Via Nginx (when core stack is running):
+Chat with valid key → **200**:
 
 ```bash
-curl -s http://localhost/gateway/chat \
+curl -i http://localhost/gateway/chat \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"Hello"}'
+  -H "X-API-Key: <your-local-gateway-key>" \
+  -d '{"provider":"ollama","model":"tinyllama","prompt":"Say only: authenticated gateway ok"}'
 ```
 
-Omitting `provider` and `model` uses `DEFAULT_PROVIDER` and `DEFAULT_MODEL`.
+Confirm host port 8000 is closed:
+
+```bash
+curl -i http://localhost:8000/health   # should fail / connection refused
+docker ps --filter name=ai-gateway    # must not show 0.0.0.0:8000->8000/tcp
+```
 
 ## Testing OpenAI later
 
-1. Copy `platform/.env.example` to `platform/.env` if you have not already.
-2. Set a real key: `OPENAI_API_KEY=sk-...` in `.env` only.
-3. Restart the gateway: `docker compose --profile ai up -d --build ai-gateway`
-4. Call:
-
-```bash
-curl -s http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"provider":"openai","model":"gpt-4.1-mini","prompt":"Say only: gateway openai ok"}'
-```
-
-If `OPENAI_API_KEY` is missing, the gateway returns **400** with a clear message and does not expose secret placeholders.
+1. Set `OPENAI_API_KEY` and `GATEWAY_API_KEY` in `platform/.env` only.
+2. Restart: `docker compose --profile ai up -d --build ai-gateway`
+3. Call via Nginx with both the gateway key header and `provider=openai`.
 
 ## Security notes
 
-- `.env` is listed in the repository `.gitignore`; never commit API keys.
-- Use placeholder values in `.env.example` only (`OPENAI_API_KEY=replace_me`).
-- API keys are read once in `main.py` from the environment and passed into provider functions; provider modules do not log or persist secrets.
-- OpenAI errors from upstream are surfaced as **502** with message text only — not raw HTTP bodies containing auth headers.
-- The gateway runs on the internal Docker network; host port 8000 is for lab testing — restrict or remove in production if not needed.
+- `.env` is gitignored; never commit API keys.
+- Use placeholders in `.env.example` only.
+- Host port **8000** is not published; Nginx on port 80 is the entry point.
+- `/metrics` is not exposed through Nginx.
+- HTTP remains until the TLS phase — this is not production-ready end-to-end.
+- Unit coverage for auth/limits: `platform/ai-gateway/test_hardening.py`.
 
 ## Interview value
 
-This gateway demonstrates patterns common in production AI platforms:
-
-- **Backend-for-frontend / API gateway** — Stable client contract over swappable inference backends.
-- **Secret isolation** — Cloud credentials confined to one service; clients stay credential-free.
-- **Multi-provider routing** — Same API for on-prem (Ollama) and SaaS (OpenAI) with explicit `provider` selection.
-- **Observability hooks** — Normalized responses include `request_id` and `latency_ms`; stdout JSON telemetry enables per-request tracing without logging prompts or secrets; Prometheus metrics expose aggregated counters and latency histograms for SRE dashboards.
-- **Security engineering mindset** — Fail closed on missing keys, no secret logging, `.env` hygiene, and documentation of trust boundaries.
+- **Trust boundary reduction** — Remove direct service ports; force a single reverse-proxy path.
+- **Fail-closed API auth** — Shared gateway key with constant-time compare before inference.
+- **Defense in depth** — Prompt and body size limits at app and proxy layers.
+- **Safe observability** — Classified errors without logging secrets or prompt content.

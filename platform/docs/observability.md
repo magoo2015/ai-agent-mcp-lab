@@ -25,7 +25,7 @@ Prometheus pulls metrics from configured targets on a schedule (15-second interv
 - Itself (`localhost:9090` inside the container)
 - Node Exporter (`node-exporter:9100`)
 - cAdvisor (`cadvisor:8080`)
-- AI Gateway (`ai-gateway:8000`) — application metrics for `/chat` requests
+- AI Gateway (`ai-gateway:8000`) — application metrics for `/chat` requests (internal Docker network only; host port 8000 is not published)
 
 Prometheus runs on the internal Docker network only—it is **not** published on a host port. Other containers (including Grafana) reach it at `http://prometheus:9090`.
 
@@ -59,7 +59,9 @@ cAdvisor is internal-only; it is not exposed on a host port.
 
 **Purpose:** Application-level metrics for LLM routing through the gateway.
 
-The AI Gateway exposes `GET /metrics` in Prometheus text format. Each `/chat` request increments counters and observes latency histograms with **low-cardinality labels only** (`provider`, `model`, `status`, `error_type`). Prompts, `request_id`, client IPs, and API keys are never included in metric labels.
+The AI Gateway exposes `GET /metrics` in Prometheus text format on the **internal Docker network only**. Nginx does **not** proxy `/metrics`. Each `/chat` request (including auth and size-limit failures) increments counters and observes latency histograms with **low-cardinality labels only** (`provider`, `model`, `status`, `error_type`). Prompts, `request_id`, client IPs, API keys, and request bodies are never included in metric labels or logged.
+
+Hardening v1 classified `error_type` values include `missing_gateway_api_key`, `invalid_gateway_api_key`, `gateway_api_key_not_configured`, `empty_prompt`, `prompt_too_large`, and `request_body_too_large`, in addition to provider/upstream errors.
 
 | Metric | Type | Labels |
 | ------ | ---- | ------ |
@@ -165,10 +167,16 @@ docker logs prometheus --tail 50
 docker logs grafana --tail 50
 ```
 
-**AI Gateway metrics (direct from gateway host port):**
+**AI Gateway metrics (internal only — host port 8000 is closed):**
+
+Prometheus scrapes `http://ai-gateway:8000/metrics` successfully (check target health). Some Prometheus image `wget` builds mishandle `hostname:port`; prefer the PromQL API or scrape confirmation:
 
 ```bash
-curl -s http://localhost:8000/metrics | grep ai_gateway
+# Target health (expect health=up for job ai-gateway)
+docker exec prometheus wget -qO- http://localhost:9090/api/v1/targets | grep ai-gateway
+
+# Series present after traffic
+docker exec prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=ai_gateway_requests_total'
 ```
 
 **Prometheus targets (from inside the Prometheus container):**
