@@ -69,10 +69,25 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     restart: unless-stopped
-    ports:
-      - "3001:3000"
+    # Internal only — reachable via Docker network (Nginx).
+    # Do not publish host port 3001; Nginx is the sole public entry point at /grafana/.
+    expose:
+      - "3000"
+    environment:
+      # Subpath hosting behind Nginx (override GRAFANA_ROOT_URL for TLS domain later)
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost/grafana/}
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      # Admin credentials — password required; only applied on first DB init (see docs/grafana.md)
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in platform/.env}
+      # Harden auth: no anonymous browse, no self-signup (normal login remains enabled)
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana:/var/lib/grafana
+    # Conservative limits for 2 vCPU / 4 GB VPS (observed ~126 MiB steady-state)
+    mem_limit: 384m
+    cpus: "0.50"
 
   node-exporter:
     image: prom/node-exporter:latest

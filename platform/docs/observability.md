@@ -37,7 +37,9 @@ Configuration: [`prometheus/prometheus.yml`](../prometheus/prometheus.yml). Metr
 
 Grafana connects to Prometheus (and other data sources) and renders dashboards, graphs, and ad-hoc queries. It is the operator-facing entry point for platform health and capacity.
 
-Grafana is published on host port **3001** (mapped to container port 3000). Dashboard and user settings persist in the `grafana` Docker volume.
+Grafana Hardening v1 removes host port **3001**. Operators reach Grafana only through Nginx at **`/grafana/`**. The container listens on internal port 3000 (`expose` only). Dashboard and user settings persist in the `grafana` Docker volume.
+
+Auth: anonymous access and self-signup are disabled; a non-default administrator password is required via `GRAFANA_ADMIN_PASSWORD` in `platform/.env`. See [grafana.md](./grafana.md) for trust boundary, subpath config, volume caveats, and password rotation.
 
 ### Node Exporter
 
@@ -94,18 +96,17 @@ See [ai-gateway.md](./ai-gateway.md#prometheus-metrics) for label rationale, sec
    docker compose ps
    ```
 
-2. Open Grafana in a browser:
+2. Open Grafana in a browser (Nginx subpath — **not** host port 3001):
 
    ```text
-   http://<vps-ip>:3001
+   http://<vps-ip>/grafana/
    ```
 
-   Replace `<vps-ip>` with your VPS public IP or use `http://localhost:3001` when working on the server directly.
+   Replace `<vps-ip>` with your VPS public IP or use `http://localhost/grafana/` on the server. Direct `http://localhost:3001` must fail (connection refused).
 
-3. Log in with the default Grafana credentials (change these after first login in production):
+3. Log in with the administrator credentials from `platform/.env` (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`). Never commit real passwords. On an existing Grafana volume, `GF_SECURITY_ADMIN_*` may not change the live password — see [grafana.md](./grafana.md#existing-grafana-volumes-and-gf_security_admin_).
 
-   - Username: `admin`
-   - Password: `admin`
+Traffic is still **HTTP** until the TLS phase.
 
 ## Add Prometheus as a Grafana Data Source
 
@@ -252,12 +253,15 @@ Browser → Nginx :80 → Open WebUI :8080 (internal) → Ollama :11434 (interna
 
 | Path | Role |
 | ---- | ---- |
-| [`docker-compose.yml`](../docker-compose.yml) | Service definitions; Grafana `3001:3000` |
+| [`docker-compose.yml`](../docker-compose.yml) | Service definitions; Grafana internal-only + resource limits |
+| [`nginx/default.conf`](../nginx/default.conf) | `/grafana/` reverse proxy (WebSocket-aware) |
 | [`prometheus/prometheus.yml`](../prometheus/prometheus.yml) | Scrape targets and intervals |
+| [`docs/grafana.md`](./grafana.md) | Grafana trust boundary, secrets, rotation, limits |
 | [`scripts/status.sh`](../scripts/status.sh) | Quick health check for the application stack |
 
 ## Next Steps
 
-- Change default Grafana credentials after first login.
+- Keep `GRAFANA_ADMIN_PASSWORD` set in `platform/.env`; rotate with `grafana cli admin reset-admin-password` when needed ([grafana.md](./grafana.md)).
 - Import the recommended dashboards and bookmark them for incident response.
 - Plan alerting (disk space, `up == 0`, high CPU) as a follow-on module—Prometheus is already collecting the underlying series.
+- Next hardening: TLS on Nginx, secure headers, and `GRAFANA_ROOT_URL=https://<domain>/grafana/`.

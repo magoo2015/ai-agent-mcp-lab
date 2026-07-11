@@ -48,7 +48,7 @@ Hardening v1 adds a shared gateway API key, request-size limits, and removal of 
 
 ### Nginx
 
-Nginx acts as the reverse proxy and **sole public entry point** for the AI chat stack and gateway API. It listens on port 80 and forwards `/` to Open WebUI and `/gateway/` to the AI Gateway on the Docker network. The `/gateway/` location forwards `X-API-Key` and sets `client_max_body_size 64k`. Nginx does **not** expose `/metrics`. Nginx depends only on Open WebUI at startup so the core stack can run without the `ai` profile.
+Nginx acts as the reverse proxy and **sole public entry point** for the AI chat stack, gateway API, and Grafana. It listens on port 80 and forwards `/` to Open WebUI, `/gateway/` to the AI Gateway, and `/grafana/` to Grafana on the Docker network. The `/gateway/` location forwards `X-API-Key` and sets `client_max_body_size 64k`. Nginx does **not** expose `/metrics` or Prometheus. Nginx depends only on Open WebUI at startup so the core stack can run without the `ai` profile.
 
 ### Observability
 
@@ -57,9 +57,9 @@ Nginx acts as the reverse proxy and **sole public entry point** for the AI chat 
 | **Prometheus** | Pull-based metrics collection and time-series storage. Scrapes Node Exporter, cAdvisor, and itself on a 15-second interval (`prometheus/prometheus.yml`). Data persists in the `prometheus` Docker volume. |
 | **Node Exporter** | Host metrics exporter. Publishes CPU, memory, disk, and network statistics from the VPS kernel and filesystems for Prometheus to scrape. |
 | **cAdvisor** | Container metrics exporter. Reads Docker cgroup and container runtime data to expose per-container CPU, memory, and I/O usage. |
-| **Grafana** | Dashboard and exploration UI. Operators connect Grafana to Prometheus to visualize platform health. Published on host port **3001**; dashboard and user data persist in the `grafana` Docker volume. |
+| **Grafana** | Dashboard and exploration UI. Operators connect Grafana to Prometheus to visualize platform health. Reachable only through Nginx at **`/grafana/`** (host port **3001** closed). Anonymous access and signup disabled; admin password required via `.env`. Dashboard and user data persist in the `grafana` Docker volume. See [grafana.md](./grafana.md). |
 
-Prometheus, Node Exporter, and cAdvisor are not published on host ports—they communicate only on the Docker network. Grafana is the operator-facing entry point for metrics visualization.
+Prometheus, Node Exporter, cAdvisor, and Grafana’s container port are not published on host ports—they communicate only on the Docker network. Nginx is the sole public path to Grafana.
 
 ### Volumes
 
@@ -98,9 +98,11 @@ The repository root contains `scripts/soc_mcp_server.py`, a Python FastMCP serve
 │  │         │ query                                                       │  │
 │  │         ▼                                                             │  │
 │  │  ┌─────────────┐                                                      │  │
-│  │  │ Grafana     │  :3001 (public — dashboards)                         │  │
+│  │  │ Grafana     │  :3000 internal → Nginx /grafana/ (HTTP; TLS later)  │  │
 │  │  └─────────────┘                                                      │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│  Nginx also proxies /grafana/ → grafana:3000 (no host :3001)                │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -141,13 +143,16 @@ tinyllama (default) or explicit model override
 ```text
 Operator Browser
     ↓
-Grafana :3001
+Nginx :80 /grafana/   (auth required; anonymous disabled)
+    ↓
+Grafana :3000 (Docker network only — host port 3001 not published)
     ↓  (PromQL queries)
-Prometheus (internal)
+Prometheus (internal)  ← http://prometheus:9090 from Grafana
     ↑  scrape (every 15s)
     ├── Node Exporter :9100 (host CPU, memory, disk, network)
     ├── cAdvisor :8080 (per-container resource usage)
+    ├── AI Gateway :8000 /metrics (internal)
     └── Prometheus :9090 (self-monitoring)
 ```
 
-Ollama, Open WebUI, and the AI Gateway are not published on public host ports. Nginx exposes port 80 for the chat UI and gateway API; Grafana exposes port 3001 for metrics dashboards. Gateway `/metrics` stays on the internal Docker network for Prometheus only.
+Ollama, Open WebUI, the AI Gateway, and Grafana are not published on public host ports. Nginx exposes port 80 for the chat UI, gateway API, and Grafana (`/grafana/`). Gateway `/metrics` and Prometheus stay on the internal Docker network. Traffic remains HTTP until the TLS phase.
