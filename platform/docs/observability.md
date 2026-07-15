@@ -4,6 +4,8 @@ This document describes the monitoring stack for the AI Security Engineering Pla
 
 For architecture context, see [architecture.md](./architecture.md). For deployment and day-to-day operations, see [../README.md](../README.md).
 
+HTTPS/TLS Hardening v1 is currently in **bootstrap mode**. Nginx still serves HTTP while the repository prepares an ACME webroot, certificate storage, and an inactive TLS configuration. See [tls.md](./tls.md); do not treat published port 443 as active HTTPS yet.
+
 ## Why Observability Matters
 
 For AI, SRE, and security engineering workloads, you cannot rely on "it feels slow" or ad-hoc `docker logs` checks alone.
@@ -102,11 +104,11 @@ See [ai-gateway.md](./ai-gateway.md#prometheus-metrics) for label rationale, sec
    http://<vps-ip>/grafana/
    ```
 
-   Replace `<vps-ip>` with your VPS public IP or use `http://localhost/grafana/` on the server. Direct `http://localhost:3001` must fail (connection refused).
+   Replace `<vps-ip>` with your VPS public IP or use `http://localhost/grafana/` on the server. Direct `http://localhost:3001` must fail (connection refused). After certificate activation, use only `https://<domain>/grafana/`.
 
 3. Log in with the administrator credentials from `platform/.env` (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`). Never commit real passwords. On an existing Grafana volume, `GF_SECURITY_ADMIN_*` may not change the live password — see [grafana.md](./grafana.md#existing-grafana-volumes-and-gf_security_admin_).
 
-Traffic is still **HTTP** until the TLS phase.
+Traffic is still **HTTP** during TLS bootstrap. HTTPS redirects are deliberately disabled until a trusted certificate exists.
 
 ## Add Prometheus as a Grafana Data Source
 
@@ -236,10 +238,10 @@ Or use Grafana's data source test and Explore UI as the supported operator path.
 The chat UI is **not** directly exposed on a host port. Traffic flow:
 
 ```text
-Browser → Nginx :80 → Open WebUI :8080 (internal) → Ollama :11434 (internal)
+Browser → Nginx :80 (bootstrap) → Open WebUI :8080 (internal) → Ollama :11434 (internal)
 ```
 
-- Use `http://<vps-ip>` or `http://localhost` for the Web UI, not Open WebUI's internal port.
+- During bootstrap, use `http://<vps-ip>` or `http://localhost` for the Web UI, not Open WebUI's internal port. After activation, verify login, assets, redirects, streaming WebSockets, and absence of mixed content at `https://<domain>/`.
 - If the UI is down but Grafana looks healthy, check Nginx and app containers:
 
   ```bash
@@ -254,7 +256,9 @@ Browser → Nginx :80 → Open WebUI :8080 (internal) → Ollama :11434 (interna
 | Path | Role |
 | ---- | ---- |
 | [`docker-compose.yml`](../docker-compose.yml) | Service definitions; Grafana internal-only + resource limits |
-| [`nginx/default.conf`](../nginx/default.conf) | `/grafana/` reverse proxy (WebSocket-aware) |
+| [`nginx/default.conf`](../nginx/default.conf) | Active HTTP bootstrap, ACME path, and reverse proxies |
+| [`nginx/tls.conf.template`](../nginx/tls.conf.template) | Inactive post-certificate HTTPS/redirect/header configuration |
+| [`docs/tls.md`](./tls.md) | DNS gate, certificate issuance, activation, validation, and renewal |
 | [`prometheus/prometheus.yml`](../prometheus/prometheus.yml) | Scrape targets and intervals |
 | [`docs/grafana.md`](./grafana.md) | Grafana trust boundary, secrets, rotation, limits |
 | [`scripts/status.sh`](../scripts/status.sh) | Quick health check for the application stack |
@@ -264,4 +268,4 @@ Browser → Nginx :80 → Open WebUI :8080 (internal) → Ollama :11434 (interna
 - Keep `GRAFANA_ADMIN_PASSWORD` set in `platform/.env`; rotate with `grafana cli admin reset-admin-password` when needed ([grafana.md](./grafana.md)).
 - Import the recommended dashboards and bookmark them for incident response.
 - Plan alerting (disk space, `up == 0`, high CPU) as a follow-on module—Prometheus is already collecting the underlying series.
-- Next hardening: TLS on Nginx, secure headers, and `GRAFANA_ROOT_URL=https://<domain>/grafana/`.
+- Complete the DNS/firewall gate, staging test, and one production issuance before activating TLS on Nginx and setting local `GRAFANA_ROOT_URL=https://<domain>/grafana/`.

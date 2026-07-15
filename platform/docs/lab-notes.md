@@ -16,6 +16,7 @@ See also: [platform-blueprint.md](./platform-blueprint.md) for the full platform
 - gemma2:2b model installed and tested (when AI profile is running)
 - tinyllama model installed (default fast test model for AI Gateway)
 - Observability stack deployed (Prometheus, Grafana, Node Exporter, cAdvisor)
+- HTTPS/TLS Hardening v1 bootstrap prepared (domain, certificate issuance, and HTTPS activation still pending)
 
 ## Core vs AI profile
 
@@ -50,11 +51,11 @@ Current containers:
 **Core (always on after `deploy.sh`):**
 
 - Open WebUI (internal)
-- Nginx (public entry point on port 80)
+- Nginx (sole public application entry point; HTTP bootstrap on port 80, port 443 reserved)
 - Prometheus (internal — metrics TSDB)
 - Node Exporter (internal — host metrics)
 - cAdvisor (internal — container metrics)
-- Grafana (public dashboards on port 3001)
+- Grafana (internal; authenticated `/grafana/` route through Nginx)
 
 **AI profile (`start-ai.sh`):**
 
@@ -67,6 +68,8 @@ Current containers:
 Browser → Nginx :80 / → Open WebUI :8080 → Ollama :11434 → tinyllama / gemma2:2b
 Client  → Nginx :80 /gateway/ → AI Gateway :8000 → Ollama :11434 → tinyllama (default) / gemma2:2b
 ```
+
+These are bootstrap HTTP paths. A trusted certificate and HTTPS redirect are not active yet.
 
 ### AI Gateway quick test
 
@@ -82,18 +85,20 @@ curl -s http://localhost/gateway/models
 # Chat (non-streaming; tinyllama is the default)
 curl -s http://localhost/gateway/chat \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <your-local-gateway-key>" \
   -d '{"prompt": "Say hello in one sentence."}'
 
 # Chat with gemma2:2b (slower on this VPS)
 curl -s http://localhost/gateway/chat \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <your-local-gateway-key>" \
   -d '{"model": "gemma2:2b", "prompt": "Say hello in one sentence."}'
 ```
 
 ### Observability flow
 
 ```text
-Browser → Grafana :3001
+Browser → Nginx :80 /grafana/ → Grafana :3000 (internal)
               ↓ PromQL
          Prometheus
               ↑ scrape (15s)
@@ -107,24 +112,20 @@ Browser → Grafana :3001
 | **Prometheus** | Scrapes metric endpoints and stores time-series data. Config: `platform/prometheus/prometheus.yml`. Data volume: `prometheus`. |
 | **Node Exporter** | Exposes VPS host metrics (CPU, memory, disk, network) for Prometheus. |
 | **cAdvisor** | Exposes per-container CPU, memory, and I/O metrics for Prometheus. |
-| **Grafana** | Web UI for dashboards. Default login on first visit: `admin` / `admin` (change immediately). Data volume: `grafana`. URL: `http://<vps-ip>:3001`. |
+| **Grafana** | Authenticated dashboard UI behind Nginx at `http://<vps-ip>/grafana/` during bootstrap. Anonymous access and self-signup are disabled. Data volume: `grafana`. |
 
 ### First-time Grafana setup
 
-1. Open `http://<vps-ip>:3001` and log in (default `admin` / `admin`).
+1. Open `http://<vps-ip>/grafana/` and log in with the administrator credentials configured for this deployment.
 2. Add Prometheus as a data source: **Connections → Data sources → Add → Prometheus**.
 3. Set URL to `http://prometheus:9090` (Docker service name on the compose network).
 4. Save & test, then explore metrics or import a community dashboard (e.g. Node Exporter Full, Docker cAdvisor).
 
-Ensure UFW allows port 3001 if accessing Grafana from outside the VPS:
-
-```bash
-sudo ufw allow 3001/tcp
-```
+Do not open port 3001. Grafana has no host port mapping. For the future HTTPS endpoint, verify only TCP 80 and 443 in both UFW and the DigitalOcean Cloud Firewall; SSH remains host-managed separately.
 
 ## Next Goals
 
-- Add HTTPS/TLS (terminate at Nginx; planned for a later module)
+- Configure a real public hostname and complete the staged TLS issuance/activation runbook in [tls.md](./tls.md)
 - Pre-built Grafana dashboards and basic alerting
 - Add promptfoo (via AI Gateway)
 - Add garak (via AI Gateway)

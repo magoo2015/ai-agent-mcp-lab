@@ -1,16 +1,36 @@
+# Inactive template: replace __PLATFORM_DOMAIN__ with the validated public
+# hostname only after its certificate exists, then activate as documented.
 server {
     listen 80;
-    server_name _;
+    server_name __PLATFORM_DOMAIN__;
 
-    # ACME HTTP-01 bootstrap path. This must remain reachable over plain HTTP
-    # and must never be redirected when the TLS configuration is activated.
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
         default_type text/plain;
         try_files $uri =404;
     }
 
-    # Metrics remain available only on the internal Docker network.
+    location / {
+        return 301 https://__PLATFORM_DOMAIN__$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name __PLATFORM_DOMAIN__;
+
+    ssl_certificate /etc/letsencrypt/live/__PLATFORM_DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__PLATFORM_DOMAIN__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Permissions-Policy "accelerometer=(), autoplay=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()" always;
+
+    # HSTS is deliberately omitted until HTTPS and renewal are validated.
+    # CSP is deliberately omitted until Open WebUI and Grafana compatibility is tested.
+
     location = /metrics {
         return 404;
     }
@@ -23,8 +43,6 @@ server {
         return 404;
     }
 
-    # Reverse proxy to AI Gateway (internal Docker network).
-    # /metrics is NOT proxied — Prometheus scrapes ai-gateway:8000 internally.
     location /gateway/ {
         client_max_body_size 64k;
 
@@ -35,7 +53,6 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # Forward gateway auth header (required for POST /chat)
         proxy_set_header X-API-Key $http_x_api_key;
 
         proxy_connect_timeout 60s;
@@ -43,11 +60,6 @@ server {
         proxy_read_timeout 300s;
     }
 
-    # Reverse proxy to Grafana (internal Docker network).
-    # Host port 3001 is not published — Nginx is the sole public entry at /grafana/.
-    # Prometheus is NOT proxied publicly.
-    # Important: do NOT strip /grafana/ in proxy_pass when GF_SERVER_SERVE_FROM_SUB_PATH=true
-    # (trailing slash on upstream would cause a redirect loop).
     location /grafana/ {
         proxy_pass http://grafana:3000;
         proxy_http_version 1.1;
@@ -57,17 +69,14 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # WebSocket / Grafana Live support
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
 
-    # Canonicalize /grafana → /grafana/
     location = /grafana {
         return 301 /grafana/;
     }
 
-    # Reverse proxy to Open WebUI (internal Docker network)
     location / {
         proxy_pass http://open-webui:8080;
         proxy_http_version 1.1;
@@ -77,11 +86,9 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # WebSocket support (Open WebUI uses WebSockets for streaming chat)
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
 
-        # Long timeouts for AI chat responses (streaming can take minutes)
         proxy_connect_timeout 60s;
         proxy_send_timeout 300s;
         proxy_read_timeout 300s;

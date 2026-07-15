@@ -44,11 +44,11 @@ Endpoints:
 - `GET /models` — available models (Ollama `/api/tags`)
 - `POST /chat` — non-streaming generation; requires `X-API-Key`; prompt/body size limited
 
-Hardening v1 adds a shared gateway API key, request-size limits, and removal of direct host exposure. Traffic is still **HTTP** (TLS is a later phase). See [ai-gateway.md](./ai-gateway.md).
+Hardening v1 adds a shared gateway API key, request-size limits, and removal of direct host exposure. HTTPS/TLS Hardening v1 is currently in **bootstrap mode**: traffic is still HTTP until a public hostname is validated and a certificate is issued. See [ai-gateway.md](./ai-gateway.md) and [tls.md](./tls.md).
 
 ### Nginx
 
-Nginx acts as the reverse proxy and **sole public entry point** for the AI chat stack, gateway API, and Grafana. It listens on port 80 and forwards `/` to Open WebUI, `/gateway/` to the AI Gateway, and `/grafana/` to Grafana on the Docker network. The `/gateway/` location forwards `X-API-Key` and sets `client_max_body_size 64k`. Nginx does **not** expose `/metrics` or Prometheus. Nginx depends only on Open WebUI at startup so the core stack can run without the `ai` profile.
+Nginx acts as the reverse proxy and **sole public entry point** for the AI chat stack, gateway API, and Grafana. Compose reserves ports 80 and 443 for Nginx, but the active bootstrap configuration listens on port 80 only. It serves ACME HTTP-01 challenges and forwards `/` to Open WebUI, `/gateway/` to the AI Gateway, and `/grafana/` to Grafana on the Docker network. The `/gateway/` location forwards `X-API-Key` and sets `client_max_body_size 64k`. Nginx explicitly denies public `/metrics` and `/gateway/metrics`; Prometheus scrapes internally. Port 443, HTTPS redirects, and security headers activate only after the domain/certificate gate passes.
 
 ### Observability
 
@@ -77,7 +77,7 @@ The repository root contains `scripts/soc_mcp_server.py`, a Python FastMCP serve
 │                                                                             │
 │  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐ │
 │  │ Nginx :80    │────▶│ Open WebUI   │────▶│ Ollama       │────▶│ tinyllama│ │
-│  │ (public)     │     │ :8080 int.   │     │ :11434 int.  │     │ gemma2:2b│ │
+│  │ 443 reserved │     │ :8080 int.   │     │ :11434 int.  │     │ gemma2:2b│ │
 │  └──────┬───────┘     └──────────────┘     └──────────────┘     └──────────┘ │
 │         │                                                                   │
 │         │ /gateway/  (X-API-Key for /chat)                                  │
@@ -98,7 +98,7 @@ The repository root contains `scripts/soc_mcp_server.py`, a Python FastMCP serve
 │  │         │ query                                                       │  │
 │  │         ▼                                                             │  │
 │  │  ┌─────────────┐                                                      │  │
-│  │  │ Grafana     │  :3000 internal → Nginx /grafana/ (HTTP; TLS later)  │  │
+│  │  │ Grafana     │  :3000 internal → Nginx /grafana/ (bootstrap HTTP)   │  │
 │  │  └─────────────┘                                                      │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │                                                                             │
@@ -155,4 +155,4 @@ Prometheus (internal)  ← http://prometheus:9090 from Grafana
     └── Prometheus :9090 (self-monitoring)
 ```
 
-Ollama, Open WebUI, the AI Gateway, and Grafana are not published on public host ports. Nginx exposes port 80 for the chat UI, gateway API, and Grafana (`/grafana/`). Gateway `/metrics` and Prometheus stay on the internal Docker network. Traffic remains HTTP until the TLS phase.
+Ollama, Open WebUI, the AI Gateway, and Grafana are not published on public host ports. Only Nginx publishes ports 80 and 443; the active bootstrap server currently handles HTTP on port 80 while port 443 has no listener. Gateway `/metrics` and Prometheus stay on the internal Docker network. A real domain, verified DNS/firewall reachability, staging validation, and one production certificate issuance are required before switching to the prepared TLS configuration.

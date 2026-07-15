@@ -9,7 +9,8 @@ For stack overview and dashboards, see [observability.md](./observability.md). F
 | Path | Exposure |
 | ---- | -------- |
 | Host port **3001** | **Closed** — not published in Compose |
-| Nginx `http://<host>/grafana/` | **Public entry** (HTTP only until TLS phase) |
+| Nginx `http://<host>/grafana/` | **Current bootstrap entry** (HTTP until certificate activation) |
+| Nginx TCP **443** | Published/reserved, but no active TLS listener during bootstrap |
 | Grafana container `:3000` | Docker network only (`expose: "3000"`) |
 | Prometheus `:9090` | Internal only — **not** proxied by Nginx |
 
@@ -19,7 +20,7 @@ Operators reach Grafana only through Nginx. Direct host access to Grafana’s co
 
 Grafana is configured for the `/grafana/` subpath:
 
-- `GF_SERVER_ROOT_URL` ← `GRAFANA_ROOT_URL` (default `http://localhost/grafana/`)
+- `GF_SERVER_ROOT_URL` ← `GRAFANA_ROOT_URL` (Compose fallback `http://localhost/grafana/`)
 - `GF_SERVER_SERVE_FROM_SUB_PATH=true`
 
 Nginx proxies (preserve the `/grafana/` URI — do not use a trailing slash on `proxy_pass` when `SERVE_FROM_SUB_PATH=true`, or Grafana redirect-loops):
@@ -33,7 +34,7 @@ location /grafana/ {
 
 Redirects and asset URLs must stay under `/grafana/` (not escape to `/login` at the site root).
 
-**TLS phase:** change `GRAFANA_ROOT_URL` in `platform/.env` to `https://<your-domain>/grafana/` when HTTPS is enabled. Do not hardcode a single domain in Compose for this lab (IP and hostname both appear).
+`.env.example` shows an HTTPS placeholder only. Keep the ignored local `platform/.env` aligned with the currently active origin; set `GRAFANA_ROOT_URL=https://<your-domain>/grafana/` only when the matching certificate and TLS Nginx configuration are activated. Recreate only the Grafana container so it reads the new URL; do not delete or reset the `grafana` volume.
 
 ## Administrator credentials
 
@@ -115,12 +116,14 @@ Revisit if Grafana OOMs or restart-loops under heavier dashboard load.
 
 ## Current limitations
 
-- Traffic to `/grafana/` is still **HTTP** (no TLS yet).
-- Secure headers (HSTS, CSP, etc.) are deferred to the TLS / Nginx hardening phase.
+- Traffic to `/grafana/` is still **HTTP** while TLS is in bootstrap mode.
+- Port 443 is reserved for Nginx, but no HTTPS listener is active without a certificate.
+- Conservative HTTPS headers are prepared in an inactive template. CSP and HSTS remain disabled until Open WebUI and Grafana compatibility, redirects, certificate trust, and renewal are validated.
 - This is **not** production-ready Grafana; it is a hardened lab posture for a single-operator VPS.
 
 ## Next phase
 
-- TLS termination on Nginx
-- Secure headers
-- Update `GRAFANA_ROOT_URL` to the HTTPS domain
+- Configure a real public hostname and verify DNS plus ports 80/443.
+- Complete staging and one production certificate issuance using [tls.md](./tls.md).
+- Activate TLS termination and conservative security headers on Nginx.
+- Update local `GRAFANA_ROOT_URL` to the matching HTTPS domain and verify login, subpath redirects, assets, and Grafana Live WebSockets.

@@ -44,6 +44,16 @@ secrets/
 credentials/
 *.pem
 *.key
+*.crt
+*.cer
+*.p12
+*.pfx
+
+# Certbot state (certificates, private keys, ACME accounts)
+platform/certbot/conf/*
+!platform/certbot/conf/.gitkeep
+platform/certbot/www/*
+!platform/certbot/www/.gitkeep
 
 # Terraform (future use)
 .terraform/

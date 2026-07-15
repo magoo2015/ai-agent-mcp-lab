@@ -22,7 +22,7 @@ AI Gateway :8000  (Docker network only — no host port published)
 
 **Nginx is the only host entry point** for the gateway. Direct host access to port **8000** was removed so the gateway is not reachable from the public internet without going through Nginx. Prometheus continues to scrape `http://ai-gateway:8000/metrics` on the Docker network.
 
-This is **lab hardening**, not a full production security posture. Traffic remains **HTTP** until a later TLS phase. There is no separate auth service, no Redis session store, and no database-backed identity.
+This is **lab hardening**, not a full production security posture. HTTPS/TLS Hardening v1 is prepared in **bootstrap mode**, but traffic remains HTTP until a public hostname passes DNS/firewall validation and a certificate is issued. There is no separate auth service, no Redis session store, and no database-backed identity. See [tls.md](./tls.md).
 
 ## Architecture
 
@@ -44,7 +44,7 @@ POST /chat  ──►  AI Gateway (:8000, internal)
  (local, Docker network)  (HTTPS, bearer token)
 ```
 
-Clients never call Ollama or OpenAI directly. External callers use `http://<host>/gateway/...` only.
+Clients never call Ollama or OpenAI directly. During bootstrap, external callers use `http://<host>/gateway/...` only. After certificate activation, Nginx will redirect that path to `https://<domain>/gateway/...`.
 
 ## Provider abstraction
 
@@ -81,6 +81,8 @@ Liveness checks and simple ops probes should work without distributing the gatew
 ### Why `/metrics` is internal only
 
 Prometheus scrapes `ai-gateway:8000` on the Docker network. Nginx does **not** expose `/metrics`. Leaving scrape unauthenticated is acceptable for this lab because the port is not published on the host; production would add network policy or scrape auth later.
+
+Nginx explicitly returns 404 for public `/metrics`, `/metrics/`, and paths beginning `/gateway/metrics`; the generic `/gateway/` proxy must not make the scrape endpoint public.
 
 ### `X-API-Key` behavior for `POST /chat`
 
@@ -294,9 +296,10 @@ docker ps --filter name=ai-gateway    # must not show 0.0.0.0:8000->8000/tcp
 
 - `.env` is gitignored; never commit API keys.
 - Use placeholders in `.env.example` only.
-- Host port **8000** is not published; Nginx on port 80 is the entry point.
+- Host port **8000** is not published; Nginx is the only public entry point.
 - `/metrics` is not exposed through Nginx.
-- HTTP remains until the TLS phase — this is not production-ready end-to-end.
+- HTTP remains active during TLS bootstrap. Port 443, redirects, and HTTPS security headers are not active until a trusted certificate exists.
+- Gateway API-key enforcement is unchanged by TLS preparation.
 - Unit coverage for auth/limits: `platform/ai-gateway/test_hardening.py`.
 
 ## Interview value
