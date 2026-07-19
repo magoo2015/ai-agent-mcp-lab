@@ -125,6 +125,43 @@ python mcp_server.py
 python test_mcp_client.py
 ```
 
+## End-to-End Investigation Demo
+
+`demo_investigation.py` is a small portfolio demo: it loads a normalized alert JSON, starts `mcp_server.py` over stdio, calls the existing `investigate_alert` MCP tool, and renders a Markdown SOC investigation report. By default the report goes to stdout; use `--output` / `-o` to write a file (parent directories are created automatically). The intended runtime is the Docker Compose `mcp` profile.
+
+```bash
+cd platform
+docker compose --profile mcp build mcp-server
+```
+
+```bash
+docker compose --profile mcp run --rm mcp-server \
+  python demo_investigation.py
+```
+
+```bash
+mkdir -p ../docs/demo-output
+
+docker compose --profile mcp run --rm mcp-server \
+  python demo_investigation.py \
+  sample_data/ssh_failed_login.json \
+  > ../docs/demo-output/ssh-failed-login-investigation.md
+```
+
+```bash
+docker compose --profile mcp run --rm mcp-server \
+  python demo_investigation.py \
+  sample_data/defender_suspicious_process.json \
+  > ../docs/demo-output/defender-suspicious-process-investigation.md
+```
+
+```bash
+docker compose --profile mcp run --rm mcp-server \
+  python demo_investigation.py \
+  sample_data/proofpoint_phishing.json \
+  > ../docs/demo-output/proofpoint-phishing-investigation.md
+```
+
 ## Connecting from Cursor (or another MCP client)
 
 Use a configuration that launches the Dockerized stdio server. Do **not** hardcode host-specific absolute paths; run the client command from the `platform` directory (or set the client's working-directory option to `platform` if supported):
@@ -195,6 +232,7 @@ Supported `alert_type` values for MITRE mapping:
 | `tools/query_generator.py` | Example investigation pivots (QRadar AQL, Sentinel KQL, Defender KQL, OpenSearch/DQL) |
 | `mcp_server.py` | Official MCP SDK stdio transport + tool registration |
 | `test_mcp_client.py` | Stdio client smoke test |
+| `demo_investigation.py` | End-to-end MCP demo — alert JSON → Markdown SOC report |
 | `sample_data/` | Realistic offline alert fixtures (SSH, Defender, Proofpoint) |
 
 Confidence scores and MITRE mappings are **conservative by design** — the framework does not overstate certainty.
