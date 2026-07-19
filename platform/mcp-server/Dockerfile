@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY mcp_server.py .
 COPY test_mcp_client.py .
+COPY demo_investigation.py .
 COPY schemas/ schemas/
 COPY tools/ tools/
 COPY sample_data/ sample_data/
