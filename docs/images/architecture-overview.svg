@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="980" viewBox="0 0 1180 980" role="img" aria-labelledby="title desc">
+  <title id="title">AI Security Engineering Platform - Architecture Overview</title>
+  <desc id="desc">Nginx reverse proxy to Open WebUI and Grafana; AI Gateway to Ollama and optional OpenAI; Prometheus metrics stack; MCP investigation workflow to Markdown SOC report.</desc>
+
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F1F5F9"/>
+      <stop offset="100%" stop-color="#E8EEF5"/>
+    </linearGradient>
+    <linearGradient id="headerGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0F2744"/>
+      <stop offset="100%" stop-color="#1A3A5C"/>
+    </linearGradient>
+    <filter id="shadow" x="-8%" y="-8%" width="116%" height="124%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0F172A" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowTeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0F766E"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0369A1"/>
+    </marker>
+  </defs>
+
+  <rect width="1180" height="980" fill="url(#bgGrad)"/>
+  <rect x="24" y="24" width="1132" height="932" rx="16" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+
+  <rect x="24" y="24" width="1132" height="72" rx="16" fill="url(#headerGrad)"/>
+  <rect x="24" y="72" width="1132" height="24" fill="#0F2744"/>
+  <text x="592" y="58" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#F8FAFC">AI Security Engineering Platform</text>
+  <text x="592" y="82" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" fill="#94A3B8">Architecture Overview - v1.0</text>
+
+  <text x="56" y="128" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#0F2744" letter-spacing="0.06em">PLATFORM STACK</text>
+
+  <g filter="url(#shadow)">
+    <rect x="250" y="142" width="160" height="48" rx="10" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="1.75"/>
+  </g>
+  <circle cx="278" cy="160" r="7" fill="#1E3A5F"/>
+  <path d="M268 180c0-7 4.5-11 10-11s10 4 10 11" fill="none" stroke="#1E3A5F" stroke-width="2" stroke-linecap="round"/>
+  <text x="338" y="171" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0F172A">Internet User</text>
+
+  <line x1="330" y1="190" x2="330" y2="218" stroke="#475569" stroke-width="1.75" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="220" y="220" width="220" height="52" rx="10" fill="#1E3A5F" stroke="#0F2744" stroke-width="1"/>
+  </g>
+  <rect x="240" y="236" width="14" height="20" rx="2" fill="#5EEAD4"/>
+  <rect x="258" y="242" width="14" height="14" rx="2" fill="#99F6E4"/>
+  <rect x="276" y="238" width="14" height="18" rx="2" fill="#5EEAD4"/>
+  <text x="348" y="251" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#F8FAFC">Nginx Reverse Proxy</text>
+
+  <path d="M330 272 V292 H160 V312" fill="none" stroke="#475569" stroke-width="1.75" marker-end="url(#arrow)"/>
+  <path d="M330 272 V292 H500 V312" fill="none" stroke="#475569" stroke-width="1.75" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="80" y="314" width="160" height="52" rx="10" fill="#FFFFFF" stroke="#0D9488" stroke-width="1.75"/>
+  </g>
+  <rect x="96" y="330" width="22" height="20" rx="4" fill="#CCFBF1" stroke="#0D9488" stroke-width="1.25"/>
+  <circle cx="107" cy="340" r="4" fill="#0D9488"/>
+  <text x="178" y="345" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0F172A">Open WebUI</text>
+
+  <g filter="url(#shadow)">
+    <rect x="420" y="314" width="160" height="52" rx="10" fill="#FFFFFF" stroke="#F59E0B" stroke-width="1.75"/>
+  </g>
+  <circle cx="444" cy="340" r="11" fill="none" stroke="#F59E0B" stroke-width="2"/>
+  <path d="M444 340 L451 332" stroke="#F59E0B" stroke-width="2" stroke-linecap="round"/>
+  <text x="512" y="345" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0F172A">Grafana</text>
+
+  <line x1="160" y1="366" x2="160" y2="396" stroke="#475569" stroke-width="1.75" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="60" y="398" width="200" height="56" rx="10" fill="#0F766E" stroke="#115E59" stroke-width="1"/>
+  </g>
+  <rect x="78" y="414" width="24" height="24" rx="5" fill="#CCFBF1"/>
+  <path d="M84 426h12M90 420v12" stroke="#0F766E" stroke-width="2" stroke-linecap="round"/>
+  <text x="178" y="423" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#F8FAFC">AI Gateway</text>
+  <text x="178" y="440" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#99F6E4">FastAPI</text>
+
+  <path d="M160 454 V474 H70 V494" fill="none" stroke="#475569" stroke-width="1.75" marker-end="url(#arrow)"/>
+  <path d="M160 454 V474 H250 V494" fill="none" stroke="#475569" stroke-width="1.75" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="10" y="496" width="120" height="48" rx="10" fill="#FFFFFF" stroke="#334155" stroke-width="1.5"/>
+  </g>
+  <circle cx="36" cy="520" r="9" fill="#E2E8F0" stroke="#334155" stroke-width="1.5"/>
+  <text x="82" y="525" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#0F172A">Ollama</text>
+
+  <g filter="url(#shadow)">
+    <rect x="170" y="496" width="160" height="48" rx="10" fill="#FFFFFF" stroke="#64748B" stroke-width="1.5" stroke-dasharray="5 3"/>
+  </g>
+  <circle cx="196" cy="520" r="9" fill="#F1F5F9" stroke="#64748B" stroke-width="1.5"/>
+  <text x="262" y="518" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#0F172A">OpenAI API</text>
+  <text x="262" y="533" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#64748B">optional</text>
+
+  <text x="380" y="400" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#0F2744" letter-spacing="0.06em">OBSERVABILITY</text>
+
+  <g filter="url(#shadow)">
+    <rect x="380" y="416" width="150" height="48" rx="10" fill="#FFFFFF" stroke="#0369A1" stroke-width="1.75"/>
+  </g>
+  <circle cx="404" cy="440" r="10" fill="#E0F2FE" stroke="#0369A1" stroke-width="1.5"/>
+  <path d="M404 433v10M399 440h10" stroke="#0369A1" stroke-width="1.5" stroke-linecap="round"/>
+  <text x="470" y="445" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#0F172A">Prometheus</text>
+
+  <g filter="url(#shadow)">
+    <rect x="360" y="510" width="120" height="40" rx="8" fill="#F8FAFC" stroke="#0369A1" stroke-width="1.25"/>
+  </g>
+  <text x="420" y="535" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#0C4A6E">Node Exporter</text>
+
+  <g filter="url(#shadow)">
+    <rect x="500" y="510" width="100" height="40" rx="8" fill="#F8FAFC" stroke="#0369A1" stroke-width="1.25"/>
+  </g>
+  <text x="550" y="535" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#0C4A6E">cAdvisor</text>
+
+  <line x1="420" y1="510" x2="430" y2="466" stroke="#0369A1" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="530" y1="510" x2="480" y2="466" stroke="#0369A1" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+
+  <path d="M455 416 V380 H500 V366" fill="none" stroke="#0369A1" stroke-width="1.75" marker-end="url(#arrowBlue)"/>
+  <text x="478" y="392" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#0369A1">metrics</text>
+
+  <text x="360" y="568" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#64748B">Host and container metrics scraped to Grafana dashboards</text>
+
+  <rect x="640" y="112" width="492" height="520" rx="14" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.25"/>
+  <text x="664" y="140" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#0F2744" letter-spacing="0.06em">SOC INVESTIGATION WORKFLOW</text>
+  <text x="664" y="158" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#64748B">MCP stdio - demo_investigation.py</text>
+
+  <g filter="url(#shadow)">
+    <rect x="760" y="176" width="220" height="44" rx="10" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="1.5"/>
+  </g>
+  <rect x="776" y="188" width="16" height="20" rx="2" fill="#E2E8F0" stroke="#1E3A5F" stroke-width="1"/>
+  <line x1="779" y1="194" x2="789" y2="194" stroke="#1E3A5F" stroke-width="1"/>
+  <line x1="779" y1="198" x2="789" y2="198" stroke="#1E3A5F" stroke-width="1"/>
+  <line x1="779" y1="202" x2="786" y2="202" stroke="#1E3A5F" stroke-width="1"/>
+  <text x="884" y="203" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#0F172A">Normalized Alert JSON</text>
+
+  <line x1="870" y1="220" x2="870" y2="246" stroke="#0F766E" stroke-width="1.75" marker-end="url(#arrowTeal)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="760" y="248" width="220" height="44" rx="10" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.5"/>
+  </g>
+  <text x="870" y="275" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#0F172A">demo_investigation.py</text>
+
+  <line x1="870" y1="292" x2="870" y2="318" stroke="#0F766E" stroke-width="1.75" marker-end="url(#arrowTeal)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="760" y="320" width="220" height="44" rx="10" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.5"/>
+  </g>
+  <text x="870" y="347" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#0F172A">MCP Client</text>
+
+  <line x1="870" y1="364" x2="870" y2="390" stroke="#0F766E" stroke-width="1.75" marker-end="url(#arrowTeal)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="760" y="392" width="220" height="48" rx="10" fill="#0F766E" stroke="#115E59" stroke-width="1"/>
+  </g>
+  <text x="870" y="421" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#F8FAFC">MCP Server</text>
+
+  <path d="M870 440 V458 H720 V476" fill="none" stroke="#0F766E" stroke-width="1.5" marker-end="url(#arrowTeal)"/>
+  <path d="M870 440 V458 V476" fill="none" stroke="#0F766E" stroke-width="1.5" marker-end="url(#arrowTeal)"/>
+  <path d="M870 440 V458 H1020 V476" fill="none" stroke="#0F766E" stroke-width="1.5" marker-end="url(#arrowTeal)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="665" y="478" width="110" height="52" rx="8" fill="#FFFFFF" stroke="#0D9488" stroke-width="1.5"/>
+  </g>
+  <text x="720" y="500" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#0F172A">MITRE</text>
+  <text x="720" y="516" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#334155">Mapper</text>
+
+  <g filter="url(#shadow)">
+    <rect x="815" y="478" width="110" height="52" rx="8" fill="#FFFFFF" stroke="#0D9488" stroke-width="1.5"/>
+  </g>
+  <text x="870" y="500" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#0F172A">Query</text>
+  <text x="870" y="516" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#334155">Generator</text>
+
+  <g filter="url(#shadow)">
+    <rect x="965" y="478" width="130" height="52" rx="8" fill="#FFFFFF" stroke="#0D9488" stroke-width="1.5"/>
+  </g>
+  <text x="1030" y="500" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#0F172A">Investigation</text>
+  <text x="1030" y="516" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#334155">Engine</text>
+
+  <path d="M720 530 V548 H870 V566" fill="none" stroke="#0F766E" stroke-width="1.5"/>
+  <path d="M870 530 V566" fill="none" stroke="#0F766E" stroke-width="1.5"/>
+  <path d="M1030 530 V548 H870 V566" fill="none" stroke="#0F766E" stroke-width="1.5" marker-end="url(#arrowTeal)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="730" y="568" width="280" height="48" rx="10" fill="#1E3A5F" stroke="#0F2744" stroke-width="1"/>
+  </g>
+  <rect x="748" y="582" width="18" height="20" rx="2" fill="#94A3B8"/>
+  <line x1="752" y1="588" x2="762" y2="588" stroke="#1E3A5F" stroke-width="1.25"/>
+  <line x1="752" y1="592" x2="762" y2="592" stroke="#1E3A5F" stroke-width="1.25"/>
+  <line x1="752" y1="596" x2="760" y2="596" stroke="#1E3A5F" stroke-width="1.25"/>
+  <text x="888" y="597" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#F8FAFC">Markdown SOC Investigation Report</text>
+
+  <line x1="56" y1="660" x2="1124" y2="660" stroke="#E2E8F0" stroke-width="1.5"/>
+
+  <text x="56" y="690" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#0F2744">Legend</text>
+
+  <rect x="56" y="708" width="22" height="14" rx="3" fill="#1E3A5F"/>
+  <text x="86" y="720" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#334155">Entry / output</text>
+
+  <rect x="200" y="708" width="22" height="14" rx="3" fill="#0F766E"/>
+  <text x="230" y="720" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#334155">AI / MCP core</text>
+
+  <rect x="340" y="708" width="22" height="14" rx="3" fill="#FFFFFF" stroke="#0369A1" stroke-width="1.5"/>
+  <text x="370" y="720" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#334155">Observability</text>
+
+  <rect x="480" y="708" width="22" height="14" rx="3" fill="#FFFFFF" stroke="#64748B" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <text x="510" y="720" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#334155">Optional external</text>
+
+  <rect x="650" y="708" width="22" height="14" rx="3" fill="#FFFFFF" stroke="#F59E0B" stroke-width="1.5"/>
+  <text x="680" y="720" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#334155">Dashboards</text>
+
+  <text x="56" y="760" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">- Nginx is the sole public entry (Open WebUI at /, Grafana at /grafana/, AI Gateway at /gateway/).</text>
+  <text x="56" y="780" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">- Prometheus scrapes Node Exporter, cAdvisor, and AI Gateway on the internal Docker network (not exposed publicly).</text>
+  <text x="56" y="800" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">- MCP investigation path uses stdio transport; tools map alerts to MITRE ATT&amp;CK, SIEM queries, and investigation output.</text>
+  <text x="56" y="820" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#475569">- OpenAI provider is optional; default local inference is Ollama.</text>
+
+  <text x="592" y="930" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#94A3B8">ai-agent-mcp-lab - portfolio architecture - documentation only</text>
+</svg>
