@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 End-to-end portfolio demo: load an alert JSON, invoke investigate_alert
-via the MCP stdio server, and render a Markdown SOC investigation report.
+via the MCP stdio server, build a structured InvestigationReport, and
+render a Markdown SOC investigation report.
 """
 
 from __future__ import annotations
@@ -17,14 +18,14 @@ from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
 
 _ROOT = Path(__file__).resolve().parent
-_DEFAULT_ALERT = _ROOT / "sample_data" / "ssh_failed_login.json"
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-_QUERY_GROUP_TITLES = {
-    "qradar_aql": "QRadar AQL",
-    "sentinel_kql": "Microsoft Sentinel KQL",
-    "defender_advanced_hunting_kql": "Microsoft Defender Advanced Hunting KQL",
-    "opensearch_dql": "OpenSearch / DQL",
-}
+from reports.builder import build_investigation_report  # noqa: E402
+from reports.markdown_renderer import render_markdown  # noqa: E402
+from schemas.alert_schema import AlertInput, InvestigationOutput  # noqa: E402
+
+_DEFAULT_ALERT = _ROOT / "sample_data" / "ssh_failed_login.json"
 
 
 def _extract_payload(result: types.CallToolResult) -> dict[str, Any]:
@@ -74,123 +75,6 @@ def _load_alert(path: Path) -> dict[str, Any]:
             f"got {type(data).__name__}"
         )
     return data
-
-
-def _bullet_list(items: list[Any]) -> str:
-    if not items:
-        return "_None provided._"
-    lines = []
-    for item in items:
-        text = str(item).strip()
-        lines.append(f"- {text}" if text else "-")
-    return "\n".join(lines)
-
-
-def _render_mitre(mappings: Any) -> str:
-    if not isinstance(mappings, list) or not mappings:
-        return "_No MITRE ATT&CK mappings returned._"
-
-    sections: list[str] = []
-    for mapping in mappings:
-        if not isinstance(mapping, dict):
-            continue
-        sections.append(
-            "\n".join(
-                [
-                    f"- **Technique ID:** {mapping.get('technique_id', 'n/a')}",
-                    f"- **Technique name:** {mapping.get('technique_name', 'n/a')}",
-                    f"- **Tactic:** {mapping.get('tactic', 'n/a')}",
-                    f"- **Confidence:** {mapping.get('confidence', 'n/a')}",
-                    f"- **Rationale:** {mapping.get('rationale', 'n/a')}",
-                ]
-            )
-        )
-    return "\n\n".join(sections) if sections else "_No MITRE ATT&CK mappings returned._"
-
-
-def _render_queries(recommended_queries: Any) -> str:
-    if not isinstance(recommended_queries, dict) or not recommended_queries:
-        return "_No recommended investigation queries returned._"
-
-    sections: list[str] = []
-    for key, queries in recommended_queries.items():
-        title = _QUERY_GROUP_TITLES.get(key, key)
-        sections.append(f"### {title}")
-        if not isinstance(queries, list) or not queries:
-            sections.append("_No queries in this group._")
-            continue
-        for query in queries:
-            sections.append(f"```text\n{query}\n```")
-    return "\n\n".join(sections)
-
-
-def render_markdown_report(alert: dict[str, Any], result: dict[str, Any]) -> str:
-    """Build the SOC Investigation Report Markdown from alert + tool result."""
-    platform = alert.get("platform", "n/a")
-    alert_type = alert.get("alert_type", "n/a")
-    severity = alert.get("severity", "n/a")
-    confidence = result.get("confidence", "n/a")
-
-    summary = str(result.get("summary") or "_No executive summary returned._")
-    severity_assessment = str(
-        result.get("severity_assessment") or "_No severity assessment returned._"
-    )
-
-    next_steps = result.get("next_steps")
-    if not isinstance(next_steps, list):
-        next_steps = []
-
-    detection = result.get("detection_opportunities")
-    if not isinstance(detection, list):
-        detection = []
-
-    limitations = result.get("limitations")
-    if not isinstance(limitations, list):
-        limitations = []
-
-    parts = [
-        "# SOC Investigation Report",
-        "",
-        "## Alert Overview",
-        f"- **Platform:** {platform}",
-        f"- **Alert type:** {alert_type}",
-        f"- **Vendor severity:** {severity}",
-        f"- **Confidence:** {confidence}",
-        "",
-        "## Executive Summary",
-        "",
-        summary,
-        "",
-        "## Severity Assessment",
-        "",
-        severity_assessment,
-        "",
-        "## MITRE ATT&CK Mapping",
-        "",
-        _render_mitre(result.get("mitre")),
-        "",
-        "## Recommended Investigation Queries",
-        "",
-        _render_queries(result.get("recommended_queries")),
-        "",
-        "## Next Investigation Steps",
-        "",
-        _bullet_list(next_steps),
-        "",
-        "## Detection Engineering Opportunities",
-        "",
-        _bullet_list(detection),
-        "",
-        "## Analysis Limitations",
-        "",
-        _bullet_list(limitations),
-        "",
-        "---",
-        "",
-        "Generated by the offline SOC Investigation Tools MCP server.",
-        "",
-    ]
-    return "\n".join(parts)
 
 
 async def run_investigation(alert: dict[str, Any]) -> dict[str, Any]:
@@ -247,17 +131,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     try:
-        alert = _load_alert(args.alert_file)
-        result = asyncio.run(run_investigation(alert))
-        report = render_markdown_report(alert, result)
+        alert_payload = _load_alert(args.alert_file)
+        result_payload = asyncio.run(run_investigation(alert_payload))
+
+        alert = AlertInput.model_validate(alert_payload)
+        output = InvestigationOutput.model_validate(result_payload)
+        report = build_investigation_report(alert, output)
+        markdown = render_markdown(report)
 
         if args.output is None:
-            sys.stdout.write(report)
-            if not report.endswith("\n"):
+            sys.stdout.write(markdown)
+            if not markdown.endswith("\n"):
                 sys.stdout.write("\n")
         else:
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(report, encoding="utf-8")
+            args.output.write_text(markdown, encoding="utf-8")
             print(f"Wrote report to {args.output}", file=sys.stderr)
 
     except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
