@@ -218,7 +218,7 @@ ai-agent-mcp-lab/
 | `docker-compose.yml` | Service definitions, profiles, volumes, resource limits |
 | `.env.example` | Documented env vars (copy to `.env`; never commit secrets) |
 | `ai-gateway/` | FastAPI gateway, providers, metrics, telemetry, hardening tests |
-| `mcp-server/` | Offline CLI, MCP stdio server, demo runner, sample alerts, schemas, tools |
+| `mcp-server/` | Offline CLI, MCP stdio server, demo runner, sample alerts, schemas, tools, report layer |
 | `nginx/` | Reverse proxy config (`default.conf`, TLS template) |
 | `prometheus/` | Scrape config |
 | `grafana/` | Volume mount point (provisioned dashboards **Planned**) |
@@ -291,7 +291,8 @@ Documented below are **Implemented** features only.
 | **MITRE mapping** | Deterministic `alert_type` → ATT&CK technique (`map_mitre` / `mitre_mapper.py`) |
 | **Investigation package** | Summary, severity assessment, MITRE, queries, next steps, detection opportunities, confidence (0–100), limitations |
 | **Detection query generation** | QRadar AQL, Sentinel KQL, Defender Advanced Hunting KQL, OpenSearch DQL drafts |
-| **Investigation report generation** | `demo_investigation.py` renders Markdown SOC reports (also under `docs/demo-output/`) |
+| **Investigation report generation** | Structured `InvestigationReport` layer (`reports/`) + Markdown renderer; `demo_investigation.py` builds the report then renders (examples under `docs/demo-output/`) |
+| **Deterministic evidence extraction** | `extract_evidence(alert)` populates `InvestigationReport.evidence` from normalized alert fields only (`EVID-###`); Markdown evidence table; no `raw_event` parsing |
 | **Sample alerts** | SSH failed login (Wazuh-shaped), Defender suspicious process, Proofpoint phishing |
 
 ## Workstation MCP (`scripts/soc_mcp_server.py`)
@@ -334,19 +335,36 @@ Actual workflow from `platform/mcp-server/` (`investigate_alert` orchestration +
 Normalized alert JSON
   (e.g. sample_data/ssh_failed_login.json)
         ↓
-investigate_alert
+AlertInput
         ↓
-MITRE Mapping          (map_alert_to_mitre)
+investigate_alert()    → InvestigationOutput
         ↓
-Query Generation       (generate_queries → AQL / KQL / DQL drafts)
+extract_evidence(alert) → EvidenceItem[]   (reports/evidence.py)
         ↓
-Investigation Analysis (summary, severity_assessment, next_steps,
-                        detection_opportunities, confidence, limitations)
+build_investigation_report()  (reports/builder.py — thin adapter)
         ↓
-Report Generation      (demo_investigation.py → Markdown)
+InvestigationReport    (reports/models.py)
         ↓
-Console Output / file  (stdout or --output; examples in docs/demo-output/)
+render_markdown()      (reports/markdown_renderer.py)
+        ↓
+Console Output / file  (demo_investigation.py; examples in docs/demo-output/)
 ```
+
+Inside `investigate_alert`, MITRE mapping, query generation, severity, confidence,
+next steps, detection opportunities, and limitations are unchanged. The report
+layer copies that package into structured fields, attaches deterministic evidence
+from normalized `AlertInput` fields only, and renders Markdown; it does not
+recalculate investigation logic or parse `raw_event`.
+
+**Evidence (Implemented — Version 1.1 Phase 2):** `extract_evidence(alert)` builds
+`EvidenceItem` rows (`EVID-001`, `EVID-002`, …) from present normalized metadata
+and observables. Missing / blank / whitespace-only fields are omitted. MITRE
+ATT&CK mappings remain classification in the MITRE section and are not duplicated
+as evidence. Threat-intelligence enrichment and `raw_event` parsing are **not**
+implemented.
+
+`InvestigationReport` still reserves empty expansion points for timeline,
+analyst reasoning, confidence rationale, and disposition — not yet populated.
 
 MCP tools can also be called independently:
 
@@ -445,8 +463,8 @@ These principles are derived from lab rules, platform docs, and existing code pa
 1. **Keep components modular** — Gateway routing ≠ provider HTTP ≠ investigation tools ≠ prompt templates.
 2. **Build incrementally** — One focused change at a time; prefer Compose profiles over always-on heavy services.
 3. **Avoid unnecessary complexity** — Offline deterministic tools before live connectors; stdio MCP before network transports.
-4. **Separate investigation logic from presentation** — Core packages are structured data; Markdown/UI are renderers (`demo_investigation.py`).
-5. **Test before committing** — Gateway unittest, MCP client smoke tests, root MCP tests, promptfoo when prompts/gateway change.
+4. **Separate investigation logic from presentation** — Core packages are structured data (`InvestigationOutput` → `InvestigationReport`); Markdown/UI are renderers (`reports/markdown_renderer.py`, driven by thin demos like `demo_investigation.py`).
+5. **Test before committing** — Gateway unittest, MCP report/unittest suite, MCP client smoke tests, root MCP tests, promptfoo when prompts/gateway change.
 6. **Prefer readability** — Clear module names, stderr-only logging on MCP stdio servers, explicit limitations in outputs.
 7. **Production-style architecture** — Reverse proxy as sole edge, internal scrape targets, secrets in env, fail-closed auth where applicable—even in a lab.
 8. **Explain WHY before HOW** — Especially for AI assistants and learners; document trade-offs (e.g. why Ollama is optional on 2 vCPU / 4 GB).
@@ -618,14 +636,15 @@ Based on patterns already present in the repository.
 
 - `platform/ai-gateway/providers/` — upstream HTTP only
 - `platform/mcp-server/tools/` — investigation logic
-- `platform/mcp-server/schemas/` — shared models
+- `platform/mcp-server/schemas/` — shared alert / investigation I/O models
+- `platform/mcp-server/reports/` — structured report models, evidence extraction, builder, Markdown renderer
 - Entry points (`main.py`, `mcp_server.py`, `demo_investigation.py`) stay thin
 
 ## Module responsibilities
 
 - Gateway `main.py`: auth, limits, routing, metrics hooks—not vendor SDK details
 - MCP `mcp_server.py`: transport + tool registration—not reimplemented investigation logic
-- Tools return structured data; demos/renderers format presentation
+- Tools return structured data (`InvestigationOutput`); `reports/` extracts alert evidence, adapts to `InvestigationReport`, and renders Markdown; demos stay thin
 
 ## Naming conventions
 
@@ -691,23 +710,23 @@ The platform treats SOC automation as **evidence-grounded assistance**, not auto
 
 # 12. Current Roadmap
 
-## Version 1.1 — Planned
+## Version 1.1 — In progress
 
-Near-term investigation-report and demo improvements (treat as **Planned** unless already present in basic form):
+Near-term investigation-report and demo improvements (treat as **Planned** unless marked Implemented):
 
 | Item | Notes |
 | ---- | ----- |
-| Structured investigation reports | Richer than current Markdown sections; stabilize schema for handoff |
-| Evidence tables | Tabular observables / supporting facts in reports |
-| Investigation timelines | Ordered event or action timelines in report output |
-| Confidence assessment | Expand beyond scalar score + MITRE confidence labels |
-| Analyst reasoning | Explicit reasoning section separate from facts |
-| Final disposition | Recommended close / escalate / monitor outcomes |
+| Structured investigation reports | **Implemented (Phase 1)** — `reports/` models + builder + Markdown renderer; preserves `InvestigationOutput` / MCP contract |
+| Evidence tables | **Implemented (Phase 2)** — `extract_evidence(alert)` → `EvidenceItem[]` with stable `EVID-###` IDs; Markdown table after Alert Overview; normalized fields only; no `raw_event` parsing; MITRE stays classification |
+| Investigation timelines | Planned expansion point on `InvestigationReport` (empty; not populated) |
+| Confidence assessment | Expand beyond scalar score + MITRE confidence labels (rationale field reserved, not populated) |
+| Analyst reasoning | Planned expansion point (optional field reserved, not populated) |
+| Final disposition | Planned expansion point (optional field reserved, not populated) |
 | Severity assessment | Deeper, evidence-tied severity narrative |
 | Interactive demo runner | Improve `demo_investigation.py` UX / multi-sample flows |
 | Platform-specific investigations | Stronger Wazuh / Defender / Proofpoint (and related) specialization |
 
-*Already Implemented today (baseline for 1.1):* JSON investigation packages, Markdown demo reports, severity assessment text, numeric confidence, MITRE confidence, three sample platforms.
+*Already Implemented today (baseline for 1.1 Phases 1–2):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown renderer), deterministic evidence extraction from normalized alert fields, Markdown demo reports (including evidence tables), severity assessment text, numeric confidence, MITRE confidence, three sample platforms. Timeline, analyst reasoning, confidence rationale, and disposition remain unpopulated. Threat-intelligence enrichment and `raw_event` parsing are not implemented.
 
 ## Version 1.2 — Planned / later
 

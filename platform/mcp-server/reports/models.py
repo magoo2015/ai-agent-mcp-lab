@@ -34,11 +34,15 @@ class AlertOverview(BaseModel):
 
 
 class EvidenceItem(BaseModel):
-    """Expansion point for Version 1.1 evidence tables (not yet populated)."""
+    """Factual evidence extracted from normalized alert fields."""
 
+    evidence_id: str
+    kind: str
+    category: str
     label: str
     value: str
-    source: Optional[str] = None
+    source: str
+    context: Optional[str] = None
 
 
 class TimelineEvent(BaseModel):
@@ -70,8 +74,9 @@ class InvestigationReport(BaseModel):
     confidence: int = Field(..., ge=0, le=100)
     limitations: list[str]
 
-    # Version 1.1 expansion points — empty until populated by future work.
+    # Evidence is populated from normalized alert fields (Phase 2).
     evidence: list[EvidenceItem] = Field(default_factory=list)
+    # Remaining Version 1.1 expansion points — empty until future work.
     timeline: list[TimelineEvent] = Field(default_factory=list)
     analyst_reasoning: Optional[str] = None
     confidence_rationale: Optional[str] = None
