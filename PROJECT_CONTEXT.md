@@ -341,6 +341,8 @@ investigate_alert()    → InvestigationOutput
         ↓
 extract_evidence(alert) → EvidenceItem[]   (reports/evidence.py)
         ↓
+build_analyst_reasoning(alert, evidence) → AnalystReasoning  (reports/reasoning.py)
+        ↓
 build_investigation_report()  (reports/builder.py — thin adapter)
         ↓
 InvestigationReport    (reports/models.py)
@@ -353,8 +355,9 @@ Console Output / file  (demo_investigation.py; examples in docs/demo-output/)
 Inside `investigate_alert`, MITRE mapping, query generation, severity, confidence,
 next steps, detection opportunities, and limitations are unchanged. The report
 layer copies that package into structured fields, attaches deterministic evidence
-from normalized `AlertInput` fields only, and renders Markdown; it does not
-recalculate investigation logic or parse `raw_event`.
+and evidence-linked analyst reasoning from normalized `AlertInput` fields only,
+and renders Markdown; it does not recalculate investigation logic or parse
+`raw_event`.
 
 **Evidence (Implemented — Version 1.1 Phase 2):** `extract_evidence(alert)` builds
 `EvidenceItem` rows (`EVID-001`, `EVID-002`, …) from present normalized metadata
@@ -363,8 +366,20 @@ ATT&CK mappings remain classification in the MITRE section and are not duplicate
 as evidence. Threat-intelligence enrichment and `raw_event` parsing are **not**
 implemented.
 
+**Analyst reasoning (Implemented — Version 1.1 Phase 3):**
+`build_analyst_reasoning(alert, evidence)` populates structured
+`AnalystReasoning` with observations, assessment, alternative explanations, and
+evidence gaps. Statements use stable IDs (`OBS-###`, `ASM-###`, `ALT-###`,
+`GAP-###`) and reference evidence by ID only. Scenario templates cover
+`ssh_failed_login`, `phishing_email`, and `suspicious_process`; unknown alert
+types receive a conservative fallback (no generic alternative explanations).
+Reasoning is deterministic template text — not LLM-generated — and does not
+confirm compromise or replace analyst judgment. Disposition, timeline, and
+confidence rationale remain unpopulated. MCP `investigate_alert` and CLI JSON
+output contracts are unchanged (reasoning is report-layer only).
+
 `InvestigationReport` still reserves empty expansion points for timeline,
-analyst reasoning, confidence rationale, and disposition — not yet populated.
+confidence rationale, and disposition — not yet populated.
 
 MCP tools can also be called independently:
 
@@ -718,15 +733,15 @@ Near-term investigation-report and demo improvements (treat as **Planned** unles
 | ---- | ----- |
 | Structured investigation reports | **Implemented (Phase 1)** — `reports/` models + builder + Markdown renderer; preserves `InvestigationOutput` / MCP contract |
 | Evidence tables | **Implemented (Phase 2)** — `extract_evidence(alert)` → `EvidenceItem[]` with stable `EVID-###` IDs; Markdown table after Alert Overview; normalized fields only; no `raw_event` parsing; MITRE stays classification |
+| Analyst reasoning | **Implemented (Phase 3)** — structured `AnalystReasoning` with evidence-linked statements; deterministic scenario templates (SSH / phishing / suspicious process) + conservative unknown fallback; Markdown after Evidence; no LLM; no disposition / timeline / confidence rationale; MCP/CLI contracts unchanged |
 | Investigation timelines | Planned expansion point on `InvestigationReport` (empty; not populated) |
 | Confidence assessment | Expand beyond scalar score + MITRE confidence labels (rationale field reserved, not populated) |
-| Analyst reasoning | Planned expansion point (optional field reserved, not populated) |
 | Final disposition | Planned expansion point (optional field reserved, not populated) |
 | Severity assessment | Deeper, evidence-tied severity narrative |
 | Interactive demo runner | Improve `demo_investigation.py` UX / multi-sample flows |
 | Platform-specific investigations | Stronger Wazuh / Defender / Proofpoint (and related) specialization |
 
-*Already Implemented today (baseline for 1.1 Phases 1–2):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown renderer), deterministic evidence extraction from normalized alert fields, Markdown demo reports (including evidence tables), severity assessment text, numeric confidence, MITRE confidence, three sample platforms. Timeline, analyst reasoning, confidence rationale, and disposition remain unpopulated. Threat-intelligence enrichment and `raw_event` parsing are not implemented.
+*Already Implemented today (baseline for 1.1 Phases 1–3):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown renderer), deterministic evidence extraction from normalized alert fields, evidence-based structured analyst reasoning (scenario templates; no LLM; no `raw_event` parsing), Markdown demo reports (evidence + analyst reasoning), severity assessment text, numeric confidence, MITRE confidence, three sample platforms. Timeline, confidence rationale, and disposition remain unpopulated. Threat-intelligence enrichment and `raw_event` parsing are not implemented. MCP and CLI investigation output keys remain unchanged.
 
 ## Version 1.2 — Planned / later
 

@@ -1,16 +1,21 @@
 """Render an InvestigationReport as deterministic Markdown.
 
 Consumes only the structured report. Does not import or call investigation
-engine functions or evidence extractors. Empty Version 1.1 expansion
-sections (aside from populated evidence) are omitted so the human-readable
-report stays intact.
+engine functions, evidence extractors, or reasoning builders. Empty Version
+1.1 expansion sections (aside from populated evidence and analyst reasoning)
+are omitted so the human-readable report stays intact.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
-from reports.models import EvidenceItem, InvestigationReport
+from reports.models import (
+    AnalystReasoning,
+    EvidenceItem,
+    InvestigationReport,
+    ReasoningStatement,
+)
 
 _QUERY_GROUP_TITLES = {
     "qradar_aql": "QRadar AQL",
@@ -40,6 +45,12 @@ def _sanitize_cell(value: Optional[Any]) -> str:
     return text.strip()
 
 
+def _sanitize_inline(value: str) -> str:
+    """Collapse embedded newlines for readable inline Markdown text."""
+    text = value.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    return text.strip()
+
+
 def _render_evidence_table(items: list[EvidenceItem]) -> str:
     header = (
         "| ID | Kind | Category | Evidence | Value | Source | Context |\n"
@@ -58,6 +69,47 @@ def _render_evidence_table(items: list[EvidenceItem]) -> str:
         for item in items
     ]
     return "\n".join([header, *rows])
+
+
+def _render_reasoning_statement(statement: ReasoningStatement) -> str:
+    """Render one reasoning statement with optional evidence ID list."""
+    text = _sanitize_inline(statement.text)
+    lines = [f"- **{statement.statement_id}:** {text}"]
+    if statement.evidence_ids:
+        joined = ", ".join(f"`{evid}`" for evid in statement.evidence_ids)
+        lines.append(f"  Evidence: {joined}")
+    return "\n".join(lines)
+
+
+def _reasoning_has_content(reasoning: Optional[AnalystReasoning]) -> bool:
+    if reasoning is None:
+        return False
+    return bool(
+        reasoning.observations
+        or reasoning.assessment
+        or reasoning.alternative_explanations
+        or reasoning.evidence_gaps
+    )
+
+
+def _render_analyst_reasoning(reasoning: AnalystReasoning) -> str:
+    """Render Analyst Reasoning subsections; omit empty ones."""
+    sections: list[str] = ["## Analyst Reasoning", ""]
+    subsection_map = (
+        ("Observations", reasoning.observations),
+        ("Assessment", reasoning.assessment),
+        ("Alternative Explanations", reasoning.alternative_explanations),
+        ("Evidence Gaps", reasoning.evidence_gaps),
+    )
+    for title, statements in subsection_map:
+        if not statements:
+            continue
+        sections.append(f"### {title}")
+        sections.append("")
+        for statement in statements:
+            sections.append(_render_reasoning_statement(statement))
+            sections.append("")
+    return "\n".join(sections).rstrip() + "\n"
 
 
 def _render_mitre(report: InvestigationReport) -> str:
@@ -127,6 +179,11 @@ def render_markdown(report: InvestigationReport) -> str:
             ]
         )
 
+    if _reasoning_has_content(report.analyst_reasoning):
+        assert report.analyst_reasoning is not None
+        parts.append(_render_analyst_reasoning(report.analyst_reasoning).rstrip())
+        parts.append("")
+
     parts.extend(
         [
             "## Executive Summary",
@@ -180,15 +237,6 @@ def render_markdown(report: InvestigationReport) -> str:
                         for event in report.timeline
                     ]
                 ),
-                "",
-            ]
-        )
-    if report.analyst_reasoning:
-        parts.extend(
-            [
-                "## Analyst Reasoning",
-                "",
-                report.analyst_reasoning,
                 "",
             ]
         )

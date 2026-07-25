@@ -1,9 +1,9 @@
 """Structured investigation report models (Version 1.1 report layer).
 
-Preserves existing investigation content while providing typed expansion
-points for evidence, timeline, analyst reasoning, confidence rationale,
-and disposition. Future sections default to empty collections or None —
-they are not populated with placeholder text.
+Preserves existing investigation content while providing typed fields for
+evidence and analyst reasoning, plus expansion points for timeline,
+confidence rationale, and disposition. Unpopulated sections default to
+empty collections or None — they are not filled with placeholder text.
 """
 
 from __future__ import annotations
@@ -45,6 +45,23 @@ class EvidenceItem(BaseModel):
     context: Optional[str] = None
 
 
+class ReasoningStatement(BaseModel):
+    """One deterministic analyst-reasoning statement with optional evidence links."""
+
+    statement_id: str
+    text: str
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class AnalystReasoning(BaseModel):
+    """Structured evidence-based analyst reasoning (Version 1.1 Phase 3)."""
+
+    observations: list[ReasoningStatement] = Field(default_factory=list)
+    assessment: list[ReasoningStatement] = Field(default_factory=list)
+    alternative_explanations: list[ReasoningStatement] = Field(default_factory=list)
+    evidence_gaps: list[ReasoningStatement] = Field(default_factory=list)
+
+
 class TimelineEvent(BaseModel):
     """Expansion point for Version 1.1 investigation timelines (not yet populated)."""
 
@@ -76,8 +93,9 @@ class InvestigationReport(BaseModel):
 
     # Evidence is populated from normalized alert fields (Phase 2).
     evidence: list[EvidenceItem] = Field(default_factory=list)
+    # Analyst reasoning is populated from evidence + alert type (Phase 3).
+    analyst_reasoning: Optional[AnalystReasoning] = None
     # Remaining Version 1.1 expansion points — empty until future work.
     timeline: list[TimelineEvent] = Field(default_factory=list)
-    analyst_reasoning: Optional[str] = None
     confidence_rationale: Optional[str] = None
     disposition: Optional[Disposition] = None

@@ -1,8 +1,9 @@
 """Thin adapter: AlertInput + InvestigationOutput → InvestigationReport.
 
 Copies existing investigation fields and attaches deterministic evidence
-from normalized alert fields. Does not recalculate severity, confidence,
-MITRE mappings, or queries, and does not parse raw_event.
+and analyst reasoning from normalized alert fields. Does not recalculate
+severity, confidence, MITRE mappings, or queries, and does not parse
+raw_event.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from schemas.alert_schema import AlertInput, InvestigationOutput
 
 from reports.evidence import extract_evidence
 from reports.models import AlertOverview, InvestigationReport, ReportMetadata
+from reports.reasoning import build_analyst_reasoning
 
 
 def build_investigation_report(
@@ -19,10 +21,12 @@ def build_investigation_report(
 ) -> InvestigationReport:
     """Adapt an investigation package into a structured report.
 
-    Inputs are not mutated. Evidence is extracted only from normalized
-    AlertInput fields. Timeline, analyst reasoning, confidence rationale,
-    and disposition remain at their empty defaults.
+    Inputs are not mutated. Evidence and analyst reasoning are derived only
+    from normalized AlertInput fields. Timeline, confidence rationale, and
+    disposition remain at their empty defaults.
     """
+    evidence = extract_evidence(alert)
+    analyst_reasoning = build_analyst_reasoning(alert, evidence)
     return InvestigationReport(
         metadata=ReportMetadata(),
         alert=AlertOverview(
@@ -42,5 +46,6 @@ def build_investigation_report(
         detection_opportunities=list(output.detection_opportunities),
         confidence=output.confidence,
         limitations=list(output.limitations),
-        evidence=extract_evidence(alert),
+        evidence=evidence,
+        analyst_reasoning=analyst_reasoning,
     )
