@@ -1,20 +1,21 @@
 """Render an InvestigationReport as deterministic Markdown.
 
 Consumes only the structured report. Does not import or call investigation
-engine functions, evidence extractors, or reasoning builders. Empty Version
-1.1 expansion sections (aside from populated evidence and analyst reasoning)
-are omitted so the human-readable report stays intact.
+engine functions, evidence extractors, reasoning builders, or confidence
+builders. Empty Version 1.1 expansion sections (aside from populated
+evidence, analyst reasoning, and confidence rationale) are omitted so the
+human-readable report stays intact.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from reports.models import (
     AnalystReasoning,
+    ConfidenceRationale,
     EvidenceItem,
     InvestigationReport,
-    ReasoningStatement,
 )
 
 _QUERY_GROUP_TITLES = {
@@ -71,12 +72,16 @@ def _render_evidence_table(items: list[EvidenceItem]) -> str:
     return "\n".join([header, *rows])
 
 
-def _render_reasoning_statement(statement: ReasoningStatement) -> str:
-    """Render one reasoning statement with optional evidence ID list."""
-    text = _sanitize_inline(statement.text)
-    lines = [f"- **{statement.statement_id}:** {text}"]
-    if statement.evidence_ids:
-        joined = ", ".join(f"`{evid}`" for evid in statement.evidence_ids)
+def _render_linked_statement(
+    statement_id: str,
+    text: str,
+    evidence_ids: Sequence[str],
+) -> str:
+    """Render one statement with optional evidence ID list (reasoning/confidence)."""
+    sanitized = _sanitize_inline(text)
+    lines = [f"- **{statement_id}:** {sanitized}"]
+    if evidence_ids:
+        joined = ", ".join(f"`{evid}`" for evid in evidence_ids)
         lines.append(f"  Evidence: {joined}")
     return "\n".join(lines)
 
@@ -107,8 +112,59 @@ def _render_analyst_reasoning(reasoning: AnalystReasoning) -> str:
         sections.append(f"### {title}")
         sections.append("")
         for statement in statements:
-            sections.append(_render_reasoning_statement(statement))
+            sections.append(
+                _render_linked_statement(
+                    statement.statement_id,
+                    statement.text,
+                    statement.evidence_ids,
+                )
+            )
             sections.append("")
+    return "\n".join(sections).rstrip() + "\n"
+
+
+def _confidence_has_content(rationale: Optional[ConfidenceRationale]) -> bool:
+    if rationale is None:
+        return False
+    return bool(
+        rationale.supporting_factors
+        or rationale.limiting_factors
+        or (rationale.summary and rationale.summary.strip())
+    )
+
+
+def _render_confidence_rationale(rationale: ConfidenceRationale) -> str:
+    """Render Confidence Rationale subsections; omit empty ones."""
+    sections: list[str] = ["## Confidence Rationale", ""]
+    if rationale.supporting_factors:
+        sections.append("### Supporting Factors")
+        sections.append("")
+        for statement in rationale.supporting_factors:
+            sections.append(
+                _render_linked_statement(
+                    statement.statement_id,
+                    statement.text,
+                    statement.evidence_ids,
+                )
+            )
+            sections.append("")
+    if rationale.limiting_factors:
+        sections.append("### Limiting Factors")
+        sections.append("")
+        for statement in rationale.limiting_factors:
+            sections.append(
+                _render_linked_statement(
+                    statement.statement_id,
+                    statement.text,
+                    statement.evidence_ids,
+                )
+            )
+            sections.append("")
+    if rationale.summary and rationale.summary.strip():
+        sections.append("### Overall")
+        sections.append("")
+        sections.append(_sanitize_inline(rationale.summary))
+        sections.append("")
     return "\n".join(sections).rstrip() + "\n"
 
 
@@ -184,6 +240,13 @@ def render_markdown(report: InvestigationReport) -> str:
         parts.append(_render_analyst_reasoning(report.analyst_reasoning).rstrip())
         parts.append("")
 
+    if _confidence_has_content(report.confidence_rationale):
+        assert report.confidence_rationale is not None
+        parts.append(
+            _render_confidence_rationale(report.confidence_rationale).rstrip()
+        )
+        parts.append("")
+
     parts.extend(
         [
             "## Executive Summary",
@@ -237,15 +300,6 @@ def render_markdown(report: InvestigationReport) -> str:
                         for event in report.timeline
                     ]
                 ),
-                "",
-            ]
-        )
-    if report.confidence_rationale:
-        parts.extend(
-            [
-                "## Confidence Rationale",
-                "",
-                report.confidence_rationale,
                 "",
             ]
         )

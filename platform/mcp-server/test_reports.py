@@ -15,10 +15,13 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from reports.builder import build_investigation_report
+from reports.confidence import build_confidence_rationale
 from reports.evidence import extract_evidence
 from reports.markdown_renderer import render_markdown
 from reports.models import (
     AnalystReasoning,
+    ConfidenceRationale,
+    ConfidenceStatement,
     EvidenceItem,
     InvestigationReport,
     ReasoningStatement,
@@ -48,6 +51,7 @@ _MAJOR_HEADINGS = (
     "## Alert Overview",
     "## Evidence",
     "## Analyst Reasoning",
+    "## Confidence Rationale",
     "## Executive Summary",
     "## Severity Assessment",
     "## MITRE ATT&CK Mapping",
@@ -55,6 +59,24 @@ _MAJOR_HEADINGS = (
     "## Next Investigation Steps",
     "## Detection Engineering Opportunities",
     "## Analysis Limitations",
+)
+
+_PROHIBITED_CONFIDENCE_PHRASES = (
+    "confirmed malicious",
+    "confirmed benign",
+    "attacker",
+    "compromised",
+    "breached",
+    "successful intrusion",
+    "user clicked",
+    "credentials stolen",
+    "malware executed",
+    "command and control established",
+    "true positive",
+    "false positive",
+    "the score was calculated from",
+    "the score increased because",
+    "this produced a score of",
 )
 
 _SSH_LABEL_ORDER = (
@@ -120,6 +142,24 @@ def _all_referenced_ids(reasoning: AnalystReasoning) -> list[str]:
         reasoning.alternative_explanations,
         reasoning.evidence_gaps,
     ):
+        for statement in section:
+            ids.extend(statement.evidence_ids)
+    return ids
+
+
+def _all_confidence_text(rationale: ConfidenceRationale) -> str:
+    parts: list[str] = []
+    for section in (rationale.supporting_factors, rationale.limiting_factors):
+        for statement in section:
+            parts.append(statement.text)
+    if rationale.summary:
+        parts.append(rationale.summary)
+    return " ".join(parts).lower()
+
+
+def _all_confidence_refs(rationale: ConfidenceRationale) -> list[str]:
+    ids: list[str] = []
+    for section in (rationale.supporting_factors, rationale.limiting_factors):
         for statement in section:
             ids.extend(statement.evidence_ids)
     return ids
@@ -677,6 +717,17 @@ class InvestigationReportTests(unittest.TestCase):
         self.assertGreater(len(self.report.analyst_reasoning.observations), 0)
         self.assertGreater(len(self.report.analyst_reasoning.assessment), 0)
 
+    def test_builder_populates_confidence_rationale(self) -> None:
+        self.assertIsNotNone(self.report.confidence_rationale)
+        assert self.report.confidence_rationale is not None
+        expected = build_confidence_rationale(self.alert, self.report.evidence)
+        self.assertEqual(
+            self.report.confidence_rationale.model_dump(),
+            expected.model_dump(),
+        )
+        self.assertGreater(len(self.report.confidence_rationale.supporting_factors), 0)
+        self.assertGreater(len(self.report.confidence_rationale.limiting_factors), 0)
+
     def test_report_serializes_to_json_compatible_data(self) -> None:
         payload = self.report.model_dump()
         encoded = json.dumps(payload)
@@ -689,19 +740,21 @@ class InvestigationReportTests(unittest.TestCase):
             restored["analyst_reasoning"]["observations"][0]["statement_id"],
             "OBS-001",
         )
+        self.assertEqual(
+            restored["confidence_rationale"]["supporting_factors"][0]["statement_id"],
+            "SUP-001",
+        )
         InvestigationReport.model_validate(restored)
 
     def test_future_list_sections_default_empty(self) -> None:
         self.assertEqual(self.report.timeline, [])
 
     def test_future_optional_sections_default_none(self) -> None:
-        self.assertIsNone(self.report.confidence_rationale)
         self.assertIsNone(self.report.disposition)
 
-    def test_no_disposition_timeline_or_confidence_rationale(self) -> None:
+    def test_no_disposition_or_timeline(self) -> None:
         self.assertEqual(self.report.timeline, [])
         self.assertIsNone(self.report.disposition)
-        self.assertIsNone(self.report.confidence_rationale)
 
     def test_severity_confidence_mitre_queries_unchanged(self) -> None:
         self.assertEqual(
@@ -750,10 +803,12 @@ class InvestigationReportTests(unittest.TestCase):
         overview_idx = markdown.index("## Alert Overview")
         evidence_idx = markdown.index("## Evidence")
         reasoning_idx = markdown.index("## Analyst Reasoning")
+        confidence_idx = markdown.index("## Confidence Rationale")
         summary_idx = markdown.index("## Executive Summary")
         self.assertLess(overview_idx, evidence_idx)
         self.assertLess(evidence_idx, reasoning_idx)
-        self.assertLess(reasoning_idx, summary_idx)
+        self.assertLess(reasoning_idx, confidence_idx)
+        self.assertLess(confidence_idx, summary_idx)
 
     def test_markdown_evidence_table_header_and_row(self) -> None:
         markdown = render_markdown(self.report)
@@ -817,9 +872,9 @@ class InvestigationReportTests(unittest.TestCase):
         self.assertNotIn("Evidence: \n", markdown)
         self.assertNotIn("Evidence:\n", markdown)
         # Gap statements have no evidence refs — no empty Evidence line after them.
-        gap_block = markdown.split("### Evidence Gaps")[1].split("## Executive Summary")[
-            0
-        ]
+        gap_block = markdown.split("### Evidence Gaps")[1].split(
+            "## Confidence Rationale"
+        )[0]
         self.assertNotIn("Evidence:", gap_block)
 
     def test_markdown_omits_empty_reasoning_subsections(self) -> None:
@@ -878,7 +933,6 @@ class InvestigationReportTests(unittest.TestCase):
     def test_empty_optional_sections_do_not_malform_markdown(self) -> None:
         markdown = render_markdown(self.report)
         self.assertNotIn("## Timeline", markdown)
-        self.assertNotIn("## Confidence Rationale", markdown)
         self.assertNotIn("## Disposition", markdown)
         self.assertNotIn("TBD", markdown)
         self.assertNotIn("not implemented", markdown)
@@ -892,6 +946,7 @@ class InvestigationReportTests(unittest.TestCase):
                 "recommended_queries": {},
                 "evidence": [],
                 "analyst_reasoning": None,
+                "confidence_rationale": None,
             }
         )
         empty_md = render_markdown(empty_report)
@@ -900,12 +955,14 @@ class InvestigationReportTests(unittest.TestCase):
         self.assertIn("_No recommended investigation queries returned._", empty_md)
         self.assertNotIn("## Evidence", empty_md)
         self.assertNotIn("## Analyst Reasoning", empty_md)
+        self.assertNotIn("## Confidence Rationale", empty_md)
 
     def test_investigation_engine_output_structure_unchanged(self) -> None:
         payload = self.output.model_dump()
         self.assertEqual(set(payload.keys()), _REQUIRED_OUTPUT_KEYS)
         self.assertNotIn("evidence", payload)
         self.assertNotIn("analyst_reasoning", payload)
+        self.assertNotIn("confidence_rationale", payload)
         validated = InvestigationOutput.model_validate(payload)
         self.assertEqual(validated.confidence, self.output.confidence)
         self.assertIsInstance(validated.mitre, list)
@@ -915,6 +972,389 @@ class InvestigationReportTests(unittest.TestCase):
         self.assertIsInstance(validated.limitations, list)
         self.assertIsInstance(validated.summary, str)
         self.assertIsInstance(validated.severity_assessment, str)
+
+
+class ConfidenceModelTests(unittest.TestCase):
+    def test_confidence_statement_validation(self) -> None:
+        statement = ConfidenceStatement(
+            statement_id="SUP-001",
+            text="A source IP is identified.",
+            evidence_ids=["EVID-007"],
+        )
+        self.assertEqual(statement.statement_id, "SUP-001")
+        self.assertEqual(statement.evidence_ids, ["EVID-007"])
+        with self.assertRaises(ValidationError):
+            ConfidenceStatement(statement_id="SUP-001")  # type: ignore[call-arg]
+
+    def test_confidence_rationale_default_empty_lists(self) -> None:
+        rationale = ConfidenceRationale()
+        self.assertEqual(rationale.supporting_factors, [])
+        self.assertEqual(rationale.limiting_factors, [])
+        self.assertIsNone(rationale.summary)
+
+    def test_no_shared_mutable_defaults(self) -> None:
+        first = ConfidenceRationale()
+        second = ConfidenceRationale()
+        first.supporting_factors.append(
+            ConfidenceStatement(statement_id="SUP-001", text="x")
+        )
+        self.assertEqual(second.supporting_factors, [])
+
+    def test_optional_summary(self) -> None:
+        rationale = ConfidenceRationale(summary="Context only.")
+        self.assertEqual(rationale.summary, "Context only.")
+
+    def test_nested_serialization_round_trip(self) -> None:
+        rationale = ConfidenceRationale(
+            supporting_factors=[
+                ConfidenceStatement(
+                    statement_id="SUP-001",
+                    text="Activity reported.",
+                    evidence_ids=["EVID-002"],
+                )
+            ],
+            limiting_factors=[
+                ConfidenceStatement(
+                    statement_id="LIM-001",
+                    text="Telemetry unavailable.",
+                )
+            ],
+            summary="Provides context.",
+        )
+        payload = rationale.model_dump()
+        encoded = json.dumps(payload)
+        restored = json.loads(encoded)
+        ConfidenceRationale.model_validate(restored)
+        self.assertEqual(
+            restored["supporting_factors"][0]["statement_id"], "SUP-001"
+        )
+
+
+class ConfidenceBuildTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ssh_alert = _load_sample_alert(_SAMPLE_SSH)
+        self.phishing_alert = _load_sample_alert(_SAMPLE_PROOFPOINT)
+        self.process_alert = _load_sample_alert(_SAMPLE_DEFENDER)
+        self.ssh_evidence = extract_evidence(self.ssh_alert)
+        self.phishing_evidence = extract_evidence(self.phishing_alert)
+        self.process_evidence = extract_evidence(self.process_alert)
+        self.ssh_rationale = build_confidence_rationale(
+            self.ssh_alert, self.ssh_evidence
+        )
+        self.phishing_rationale = build_confidence_rationale(
+            self.phishing_alert, self.phishing_evidence
+        )
+        self.process_rationale = build_confidence_rationale(
+            self.process_alert, self.process_evidence
+        )
+
+    def test_supporting_ids_start_at_sup_001(self) -> None:
+        self.assertEqual(
+            self.ssh_rationale.supporting_factors[0].statement_id, "SUP-001"
+        )
+
+    def test_limiting_ids_start_at_lim_001(self) -> None:
+        self.assertEqual(
+            self.ssh_rationale.limiting_factors[0].statement_id, "LIM-001"
+        )
+
+    def test_sequential_and_independent_numbering(self) -> None:
+        for index, statement in enumerate(
+            self.ssh_rationale.supporting_factors, start=1
+        ):
+            self.assertEqual(statement.statement_id, f"SUP-{index:03d}")
+        for index, statement in enumerate(
+            self.ssh_rationale.limiting_factors, start=1
+        ):
+            self.assertEqual(statement.statement_id, f"LIM-{index:03d}")
+
+    def test_determinism_across_repeated_builds(self) -> None:
+        first = build_confidence_rationale(self.ssh_alert, self.ssh_evidence)
+        second = build_confidence_rationale(self.ssh_alert, self.ssh_evidence)
+        self.assertEqual(first.model_dump(), second.model_dump())
+
+    def test_supporting_refs_exist_and_limiting_normally_unreferenced(self) -> None:
+        known = {item.evidence_id for item in self.ssh_evidence}
+        for statement in self.ssh_rationale.supporting_factors:
+            self.assertTrue(statement.evidence_ids)
+            for evid in statement.evidence_ids:
+                self.assertIn(evid, known)
+        for statement in self.ssh_rationale.limiting_factors:
+            self.assertEqual(statement.evidence_ids, [])
+
+    def test_no_duplicate_evidence_ids_in_statements(self) -> None:
+        for rationale in (
+            self.ssh_rationale,
+            self.phishing_rationale,
+            self.process_rationale,
+        ):
+            for section in (
+                rationale.supporting_factors,
+                rationale.limiting_factors,
+            ):
+                for statement in section:
+                    self.assertEqual(
+                        statement.evidence_ids,
+                        list(dict.fromkeys(statement.evidence_ids)),
+                    )
+
+    def test_lookup_does_not_rely_on_fixed_evidence_numbers(self) -> None:
+        alert = AlertInput(
+            platform="custom",
+            alert_type="ssh_failed_login",
+            severity="high",
+            description="Auth failures.",
+            observables=AlertObservables(
+                source_ip="203.0.113.99",
+                username="admin",
+            ),
+        )
+        evidence = extract_evidence(alert)
+        by_source = {item.source: item.evidence_id for item in evidence}
+        rationale = build_confidence_rationale(alert, evidence)
+        source_ip_id = by_source["alert.observables.source_ip"]
+        username_id = by_source["alert.observables.username"]
+        all_refs = _all_confidence_refs(rationale)
+        self.assertIn(source_ip_id, all_refs)
+        self.assertIn(username_id, all_refs)
+        # Source IP is not always EVID-007; lookup is by source path.
+        self.assertNotEqual(source_ip_id, "EVID-007")
+
+    def test_mitre_and_raw_event_fields_never_referenced(self) -> None:
+        for rationale in (
+            self.ssh_rationale,
+            self.phishing_rationale,
+            self.process_rationale,
+        ):
+            blob = _all_confidence_text(rationale)
+            self.assertNotIn("t1110", blob)
+            self.assertNotIn("technique", blob)
+            self.assertNotIn("full_log", blob)
+            self.assertNotIn("processcmdline", blob.replace(" ", ""))
+            self.assertNotIn("impostorscore", blob.replace(" ", ""))
+            for evid in _all_confidence_refs(rationale):
+                self.assertTrue(evid.startswith("EVID-"))
+                self.assertFalse(evid.startswith("T"))
+
+    def test_ssh_grounding_and_uncertainty(self) -> None:
+        text = _all_confidence_text(self.ssh_rationale)
+        self.assertIn("authentication-failure activity is reported", text)
+        self.assertIn("source ip is identified", text)
+        self.assertIn("target username is identified", text)
+        self.assertIn("successful authentication cannot be confirmed", text)
+        self.assertIn("post-authentication endpoint activity is not available", text)
+        for phrase in _PROHIBITED_CONFIDENCE_PHRASES:
+            self.assertNotIn(phrase, text)
+        self.assertNotIn("brute force is confirmed", text)
+        self.assertNotIn("login succeeded", text)
+
+    def test_phishing_factors_and_uncertainty(self) -> None:
+        text = _all_confidence_text(self.phishing_rationale)
+        self.assertIn("suspicious email activity is reported", text)
+        self.assertIn("email sender is identified", text)
+        self.assertIn("email recipient is identified", text)
+        self.assertIn("url is identified", text)
+        self.assertIn("message-delivery outcome cannot be confirmed", text)
+        self.assertIn("user interaction is not available", text)
+        self.assertIn("credential submission cannot be confirmed", text)
+        for phrase in _PROHIBITED_CONFIDENCE_PHRASES:
+            self.assertNotIn(phrase, text)
+
+    def test_suspicious_process_factors_and_uncertainty(self) -> None:
+        text = _all_confidence_text(self.process_rationale)
+        self.assertIn("suspicious process activity is reported", text)
+        self.assertIn("process name is identified", text)
+        self.assertIn("host is identified", text)
+        self.assertIn("file hash is identified", text)
+        self.assertIn("full process command line is not available", text)
+        self.assertIn("parent-child process context is not available", text)
+        self.assertIn("endpoint containment status is not available", text)
+        for phrase in _PROHIBITED_CONFIDENCE_PHRASES:
+            self.assertNotIn(phrase, text)
+        self.assertNotIn("persistence", text)
+        self.assertNotIn("c2", text)
+
+    def test_unknown_alert_conservative_fallback(self) -> None:
+        alert = AlertInput(
+            platform="custom",
+            alert_type="unusual_dns_tunnel",
+            severity="medium",
+            description="Odd DNS patterns observed.",
+            observables=AlertObservables(
+                source_ip="203.0.113.99",
+                hostname="resolver-01",
+                url="http://example.test/path",
+                username="svc-dns",
+            ),
+        )
+        evidence = extract_evidence(alert)
+        rationale = build_confidence_rationale(alert, evidence)
+        text = _all_confidence_text(rationale)
+        self.assertIn("alert type is identified", text)
+        self.assertIn("description is identified", text)
+        self.assertLessEqual(len(rationale.supporting_factors), 5)
+        self.assertIn(
+            "scenario-specific corroborating telemetry is not represented",
+            text,
+        )
+        self.assertIn("analyst validation is required", text)
+        self.assertNotIn("authentication-failure activity", text)
+        self.assertNotIn("suspicious email activity", text)
+        self.assertNotIn("suspicious process activity", text)
+        self.assertIn("do not reproduce the numeric confidence calculation", text)
+
+    def test_score_independence_from_output_confidence(self) -> None:
+        output_a = investigate_alert(self.ssh_alert)
+        output_b = output_a.model_copy(update={"confidence": 12})
+        report_a = build_investigation_report(self.ssh_alert, output_a)
+        report_b = build_investigation_report(self.ssh_alert, output_b)
+        assert report_a.confidence_rationale is not None
+        assert report_b.confidence_rationale is not None
+        self.assertEqual(
+            report_a.confidence_rationale.model_dump(),
+            report_b.confidence_rationale.model_dump(),
+        )
+        self.assertEqual(report_a.confidence, output_a.confidence)
+        self.assertEqual(report_b.confidence, 12)
+        blob = _all_confidence_text(report_a.confidence_rationale)
+        self.assertNotRegex(blob, r"\b\d{1,3}\b")
+        self.assertIn("do not reproduce its calculation", blob)
+        self.assertNotIn("score range", blob)
+        self.assertNotIn("percentage", blob)
+
+    def test_raw_event_asymmetry_same_rationale(self) -> None:
+        with_raw = self.ssh_alert
+        without_raw = self.ssh_alert.model_copy(update={"raw_event": None})
+        evidence_with = extract_evidence(with_raw)
+        evidence_without = extract_evidence(without_raw)
+        rationale_with = build_confidence_rationale(with_raw, evidence_with)
+        rationale_without = build_confidence_rationale(without_raw, evidence_without)
+        self.assertEqual(
+            rationale_with.model_dump(),
+            rationale_without.model_dump(),
+        )
+        # Engine may still score differently when raw_event presence differs.
+        score_with = investigate_alert(with_raw).confidence
+        score_without = investigate_alert(without_raw).confidence
+        self.assertNotEqual(score_with, score_without)
+        blob = _all_confidence_text(rationale_with)
+        self.assertNotIn("full_log", blob)
+        self.assertNotIn("sshd: authentication failed", blob)
+        self.assertNotIn("54422", blob)
+
+    def test_phase4_does_not_change_engine_artifacts(self) -> None:
+        output = investigate_alert(self.ssh_alert)
+        report = build_investigation_report(self.ssh_alert, output)
+        self.assertEqual(report.severity_assessment, output.severity_assessment)
+        self.assertEqual(report.confidence, output.confidence)
+        self.assertEqual(
+            [m.model_dump() for m in report.mitre],
+            [m.model_dump() for m in output.mitre],
+        )
+        self.assertEqual(report.recommended_queries, output.recommended_queries)
+        expected_evidence = extract_evidence(self.ssh_alert)
+        self.assertEqual(
+            [item.model_dump() for item in report.evidence],
+            [item.model_dump() for item in expected_evidence],
+        )
+        expected_reasoning = build_analyst_reasoning(
+            self.ssh_alert, expected_evidence
+        )
+        assert report.analyst_reasoning is not None
+        self.assertEqual(
+            report.analyst_reasoning.model_dump(),
+            expected_reasoning.model_dump(),
+        )
+        self.assertEqual(report.timeline, [])
+        self.assertIsNone(report.disposition)
+        self.assertEqual(set(output.model_dump().keys()), _REQUIRED_OUTPUT_KEYS)
+
+
+class ConfidenceMarkdownTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.alert = _load_sample_alert(_SAMPLE_SSH)
+        self.output = investigate_alert(self.alert)
+        self.report = build_investigation_report(self.alert, self.output)
+
+    def test_confidence_heading_order_and_subsections(self) -> None:
+        markdown = render_markdown(self.report)
+        self.assertIn("## Confidence Rationale", markdown)
+        reasoning_idx = markdown.index("## Analyst Reasoning")
+        confidence_idx = markdown.index("## Confidence Rationale")
+        summary_idx = markdown.index("## Executive Summary")
+        self.assertLess(reasoning_idx, confidence_idx)
+        self.assertLess(confidence_idx, summary_idx)
+        self.assertIn("### Supporting Factors", markdown)
+        self.assertIn("### Limiting Factors", markdown)
+        self.assertIn("### Overall", markdown)
+        self.assertIn("**SUP-001:**", markdown)
+        self.assertIn("**LIM-001:**", markdown)
+
+    def test_confidence_evidence_ids_use_backticks(self) -> None:
+        markdown = render_markdown(self.report)
+        assert self.report.confidence_rationale is not None
+        for evid in self.report.confidence_rationale.supporting_factors[0].evidence_ids:
+            self.assertIn(f"`{evid}`", markdown)
+
+    def test_empty_evidence_lines_omitted_in_limiting(self) -> None:
+        markdown = render_markdown(self.report)
+        limiting_block = markdown.split("### Limiting Factors")[1].split("### Overall")[
+            0
+        ]
+        self.assertNotIn("Evidence:", limiting_block)
+
+    def test_empty_subsections_omitted(self) -> None:
+        rationale = ConfidenceRationale(
+            supporting_factors=[
+                ConfidenceStatement(
+                    statement_id="SUP-001",
+                    text="Only supporting factor.",
+                    evidence_ids=["EVID-001"],
+                )
+            ]
+        )
+        report = self.report.model_copy(update={"confidence_rationale": rationale})
+        markdown = render_markdown(report)
+        self.assertIn("### Supporting Factors", markdown)
+        self.assertNotIn("### Limiting Factors", markdown)
+        self.assertNotIn("### Overall", markdown)
+
+    def test_fully_empty_rationale_omitted(self) -> None:
+        none_report = self.report.model_copy(update={"confidence_rationale": None})
+        self.assertNotIn("## Confidence Rationale", render_markdown(none_report))
+        empty_report = self.report.model_copy(
+            update={"confidence_rationale": ConfidenceRationale()}
+        )
+        self.assertNotIn("## Confidence Rationale", render_markdown(empty_report))
+
+    def test_confidence_sanitizes_newlines_and_preserves_content(self) -> None:
+        rationale = ConfidenceRationale(
+            supporting_factors=[
+                ConfidenceStatement(
+                    statement_id="SUP-001",
+                    text="Line one.\nLine two | pipe remains readable.",
+                    evidence_ids=["EVID-001"],
+                )
+            ],
+            summary="Overall line one.\nOverall line two.",
+        )
+        report = self.report.model_copy(update={"confidence_rationale": rationale})
+        markdown = render_markdown(report)
+        self.assertIn(
+            "Line one. Line two | pipe remains readable.",
+            markdown,
+        )
+        self.assertIn("Overall line one. Overall line two.", markdown)
+        self.assertNotIn("Line one.\nLine two", markdown)
+
+    def test_numeric_confidence_stays_in_alert_overview(self) -> None:
+        markdown = render_markdown(self.report)
+        overview = markdown.split("## Alert Overview")[1].split("## Evidence")[0]
+        self.assertIn(f"**Confidence:** {self.report.confidence}", overview)
+        confidence_section = markdown.split("## Confidence Rationale")[1].split(
+            "## Executive Summary"
+        )[0]
+        self.assertNotIn(str(self.report.confidence), confidence_section)
 
 
 if __name__ == "__main__":

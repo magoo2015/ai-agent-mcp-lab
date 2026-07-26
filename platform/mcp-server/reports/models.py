@@ -1,8 +1,8 @@
 """Structured investigation report models (Version 1.1 report layer).
 
 Preserves existing investigation content while providing typed fields for
-evidence and analyst reasoning, plus expansion points for timeline,
-confidence rationale, and disposition. Unpopulated sections default to
+evidence, analyst reasoning, and confidence rationale, plus expansion
+points for timeline and disposition. Unpopulated sections default to
 empty collections or None — they are not filled with placeholder text.
 """
 
@@ -62,6 +62,22 @@ class AnalystReasoning(BaseModel):
     evidence_gaps: list[ReasoningStatement] = Field(default_factory=list)
 
 
+class ConfidenceStatement(BaseModel):
+    """One deterministic confidence-rationale statement with optional evidence links."""
+
+    statement_id: str
+    text: str
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class ConfidenceRationale(BaseModel):
+    """Structured confidence context from normalized evidence (Version 1.1 Phase 4)."""
+
+    supporting_factors: list[ConfidenceStatement] = Field(default_factory=list)
+    limiting_factors: list[ConfidenceStatement] = Field(default_factory=list)
+    summary: Optional[str] = None
+
+
 class TimelineEvent(BaseModel):
     """Expansion point for Version 1.1 investigation timelines (not yet populated)."""
 
@@ -95,7 +111,8 @@ class InvestigationReport(BaseModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
     # Analyst reasoning is populated from evidence + alert type (Phase 3).
     analyst_reasoning: Optional[AnalystReasoning] = None
+    # Confidence rationale from normalized evidence only (Phase 4).
+    confidence_rationale: Optional[ConfidenceRationale] = None
     # Remaining Version 1.1 expansion points — empty until future work.
     timeline: list[TimelineEvent] = Field(default_factory=list)
-    confidence_rationale: Optional[str] = None
     disposition: Optional[Disposition] = None
