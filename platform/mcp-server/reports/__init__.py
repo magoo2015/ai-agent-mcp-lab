@@ -1,9 +1,10 @@
-"""Reusable investigation report models, builder, and Markdown renderer."""
+"""Reusable investigation report models, builder, and renderers."""
 
 from reports.builder import build_investigation_report
 from reports.confidence import build_confidence_rationale
 from reports.disposition import build_recommended_disposition
 from reports.evidence import extract_evidence
+from reports.html_renderer import render_html
 from reports.markdown_renderer import render_markdown
 from reports.models import (
     AlertOverview,
@@ -37,5 +38,6 @@ __all__ = [
     "build_investigation_report",
     "build_recommended_disposition",
     "extract_evidence",
+    "render_html",
     "render_markdown",
 ]

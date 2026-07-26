@@ -9,6 +9,7 @@ COPY main.py .
 COPY mcp_server.py .
 COPY test_mcp_client.py .
 COPY test_reports.py .
+COPY test_html_renderer.py .
 COPY demo_investigation.py .
 COPY schemas/ schemas/
 COPY tools/ tools/

@@ -21,7 +21,7 @@ Do not treat Planned or Future Ideas as implemented features.
 This repository is a **safe, offline-capable learning and portfolio lab** for AI security engineering. It combines:
 
 1. A **self-hosted AI runtime** (Docker Compose on a hardened VPS): Nginx, Open WebUI, optional Ollama inference, a FastAPI AI Gateway, and Prometheus/Grafana observability.
-2. An **SOC investigation automation layer** built on the Model Context Protocol (MCP): deterministic tools that accept normalized alert JSON and produce analyst-ready investigation packages, MITRE mappings, multi-SIEM query drafts, and Markdown reports—without live SIEM, EDR, or production API access.
+2. An **SOC investigation automation layer** built on the Model Context Protocol (MCP): deterministic tools that accept normalized alert JSON and produce analyst-ready investigation packages, MITRE mappings, multi-SIEM query drafts, and Markdown/HTML reports—without live SIEM, EDR, or production API access.
 
 ## Long-term vision
 
@@ -235,7 +235,7 @@ ai-agent-mcp-lab/
 | Path | Role |
 | ---- | ---- |
 | `docs/images/` | Architecture diagram (SVG/PNG/drawio) |
-| `docs/demo-output/` | Markdown SOC reports from MCP demos |
+| `docs/demo-output/` | Markdown and HTML SOC reports from MCP demos |
 | `docs/project_context.md` | Empty placeholder (superseded by root `PROJECT_CONTEXT.md`) |
 
 ## `scripts/` — workstation MCP lab
@@ -291,10 +291,11 @@ Documented below are **Implemented** features only.
 | **MITRE mapping** | Deterministic `alert_type` → ATT&CK technique (`map_mitre` / `mitre_mapper.py`) |
 | **Investigation package** | Summary, severity assessment, MITRE, queries, next steps, detection opportunities, confidence (0–100), limitations |
 | **Detection query generation** | QRadar AQL, Sentinel KQL, Defender Advanced Hunting KQL, OpenSearch DQL drafts |
-| **Investigation report generation** | Structured `InvestigationReport` layer (`reports/`) + Markdown renderer; `demo_investigation.py` builds the report then renders (examples under `docs/demo-output/`) |
-| **Deterministic evidence extraction** | `extract_evidence(alert)` populates `InvestigationReport.evidence` from normalized alert fields only (`EVID-###`); Markdown evidence table; no `raw_event` parsing |
+| **Investigation report generation** | Structured `InvestigationReport` layer (`reports/`) + Markdown and standalone HTML renderers; `demo_investigation.py` builds one report then renders (examples under `docs/demo-output/`) |
+| **Deterministic evidence extraction** | `extract_evidence(alert)` populates `InvestigationReport.evidence` from normalized alert fields only (`EVID-###`); Markdown/HTML evidence tables; no `raw_event` parsing |
 | **Structured analyst reasoning** | `build_analyst_reasoning(alert, evidence)` → evidence-linked `AnalystReasoning` (`OBS/ASM/ALT/GAP-###`); report-layer only |
 | **Structured confidence rationale** | `build_confidence_rationale(alert, evidence)` → `ConfidenceRationale` (`SUP/LIM-###`); context for (not a reproduction of) the numeric score; report-layer only |
+| **Standalone HTML reports** | `render_html(report)` → offline, no-JS, embedded-CSS HTML; executive-first layout; print-friendly; planned PDF source (Phase 7) |
 | **Sample alerts** | SSH failed login (Wazuh-shaped), Defender suspicious process, Proofpoint phishing |
 
 ## Workstation MCP (`scripts/soc_mcp_server.py`)
@@ -331,7 +332,7 @@ Extended FastMCP tools including alert parsing, SSH/command investigation, corre
 
 ## Platform offline MCP flow (primary demo path)
 
-Actual workflow from `platform/mcp-server/` (`investigate_alert` orchestration + optional Markdown demo):
+Actual workflow from `platform/mcp-server/` (`investigate_alert` orchestration + optional Markdown/HTML demo):
 
 ```text
 Normalized alert JSON
@@ -350,10 +351,22 @@ build_confidence_rationale(alert, evidence) → ConfidenceRationale  (reports/co
 build_investigation_report()  (reports/builder.py — thin adapter)
         ↓
 InvestigationReport    (reports/models.py)
-        ↓
-render_markdown()      (reports/markdown_renderer.py)
-        ↓
+        ├── Markdown Renderer  (reports/markdown_renderer.py)
+        └── HTML Renderer      (reports/html_renderer.py)
+                ↓
 Console Output / file  (demo_investigation.py; examples in docs/demo-output/)
+```
+
+Simplified presentation pipeline:
+
+```text
+AlertInput
+    ↓
+InvestigationOutput
+    ↓
+InvestigationReport
+    ├── Markdown Renderer
+    └── HTML Renderer
 ```
 
 Inside `investigate_alert`, MITRE mapping, query generation, severity, confidence,
@@ -361,7 +374,8 @@ next steps, detection opportunities, and limitations are unchanged. The report
 layer copies that package into structured fields, attaches deterministic evidence,
 evidence-linked analyst reasoning, structured confidence rationale, and a
 report-only recommended disposition from normalized `AlertInput` fields only, and
-renders Markdown; it does not recalculate investigation logic or parse `raw_event`.
+renders Markdown and/or standalone HTML; it does not recalculate investigation
+logic or parse `raw_event`.
 
 **Evidence (Implemented — Version 1.1 Phase 2):** `extract_evidence(alert)` builds
 `EvidenceItem` rows (`EVID-001`, `EVID-002`, …) from present normalized metadata
@@ -409,6 +423,17 @@ confidence or severity thresholds and no `raw_event` parsing. Timeline remains
 unpopulated. MCP `investigate_alert` and CLI JSON output contracts are unchanged
 (evidence, reasoning, confidence rationale, and disposition are report-layer
 only).
+
+**Standalone HTML report (Implemented — Version 1.1 Phase 6):**
+`render_html(report)` produces a deterministic, offline, standalone HTML document
+from the same `InvestigationReport` used by Markdown. Pure presentation layer:
+embedded CSS only, no JavaScript, no external fonts/CDNs/images, standard-library
+`html.escape` only (no template engine). Executive-first section order with an
+Investigation Status summary card, semantic evidence table, print-friendly CSS,
+and analyst-review language kept prominent. File writing stays outside the
+renderer (`demo_investigation.py --html-output`). HTML is the planned source for
+Phase 7 PDF export. Investigation logic, CLI compact keys, and MCP output keys
+are unchanged.
 
 `InvestigationReport` still reserves an empty expansion point for timeline —
 not yet populated.
@@ -510,7 +535,7 @@ These principles are derived from lab rules, platform docs, and existing code pa
 1. **Keep components modular** — Gateway routing ≠ provider HTTP ≠ investigation tools ≠ prompt templates.
 2. **Build incrementally** — One focused change at a time; prefer Compose profiles over always-on heavy services.
 3. **Avoid unnecessary complexity** — Offline deterministic tools before live connectors; stdio MCP before network transports.
-4. **Separate investigation logic from presentation** — Core packages are structured data (`InvestigationOutput` → `InvestigationReport`); Markdown/UI are renderers (`reports/markdown_renderer.py`, driven by thin demos like `demo_investigation.py`).
+4. **Separate investigation logic from presentation** — Core packages are structured data (`InvestigationOutput` → `InvestigationReport`); Markdown/HTML are pure renderers (`reports/markdown_renderer.py`, `reports/html_renderer.py`, driven by thin demos like `demo_investigation.py`).
 5. **Test before committing** — Gateway unittest, MCP report/unittest suite, MCP client smoke tests, root MCP tests, promptfoo when prompts/gateway change.
 6. **Prefer readability** — Clear module names, stderr-only logging on MCP stdio servers, explicit limitations in outputs.
 7. **Production-style architecture** — Reverse proxy as sole edge, internal scrape targets, secrets in env, fail-closed auth where applicable—even in a lab.
@@ -684,14 +709,14 @@ Based on patterns already present in the repository.
 - `platform/ai-gateway/providers/` — upstream HTTP only
 - `platform/mcp-server/tools/` — investigation logic
 - `platform/mcp-server/schemas/` — shared alert / investigation I/O models
-- `platform/mcp-server/reports/` — structured report models, evidence extraction, builder, Markdown renderer
+- `platform/mcp-server/reports/` — structured report models, evidence extraction, builder, Markdown + HTML renderers
 - Entry points (`main.py`, `mcp_server.py`, `demo_investigation.py`) stay thin
 
 ## Module responsibilities
 
 - Gateway `main.py`: auth, limits, routing, metrics hooks—not vendor SDK details
 - MCP `mcp_server.py`: transport + tool registration—not reimplemented investigation logic
-- Tools return structured data (`InvestigationOutput`); `reports/` extracts alert evidence, adapts to `InvestigationReport`, and renders Markdown; demos stay thin
+- Tools return structured data (`InvestigationOutput`); `reports/` extracts alert evidence, adapts to `InvestigationReport`, and renders Markdown/HTML; demos stay thin
 
 ## Naming conventions
 
@@ -769,11 +794,13 @@ Near-term investigation-report and demo improvements (treat as **Planned** unles
 | Confidence assessment | **Implemented (Phase 4)** — structured `ConfidenceRationale` (`SUP-###` / `LIM-###`) from normalized evidence; context for (not a reproduction of) `_compute_confidence()`; Markdown after Analyst Reasoning; score remains engine-owned; MCP/CLI contracts unchanged |
 | Investigation timelines | Planned expansion point on `InvestigationReport` (empty; not populated) |
 | Final disposition | **Implemented (Phase 5)** — structured report-only `RecommendedDisposition` (`Suspicious Activity` / `Insufficient Evidence`); evidence-grounded `EVID-###` refs; deterministic scenario handlers + conservative unknown fallback; analyst review always required; no benign/likely-malicious/TP/FP labels; no automated closure or containment; no confidence/severity thresholds; no `raw_event` parsing; MCP/CLI contracts unchanged |
+| Standalone HTML reports | **Implemented (Phase 6)** — `render_html(InvestigationReport) -> str`; offline standalone HTML; embedded CSS only; no JavaScript/CDNs/template engines; executive-first layout + Investigation Status card; print-friendly; deterministic; stdlib escaping; same report object as Markdown; planned PDF source for Phase 7; MCP/CLI contracts unchanged |
+| PDF export | Planned (Phase 7) — derive from Phase 6 HTML; not implemented |
 | Severity assessment | Deeper, evidence-tied severity narrative |
 | Interactive demo runner | Improve `demo_investigation.py` UX / multi-sample flows |
 | Platform-specific investigations | Stronger Wazuh / Defender / Proofpoint (and related) specialization |
 
-*Already Implemented today (baseline for 1.1 Phases 1–5):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown renderer), deterministic evidence extraction from normalized alert fields, evidence-based structured analyst reasoning, structured confidence rationale (supporting/limiting factors; normalized evidence only; does not recalculate or fully reproduce the numeric score), structured recommended disposition (two-label controlled vocabulary; advisory only; analyst review always required), Markdown demo reports (evidence + analyst reasoning + confidence rationale + recommended disposition), severity assessment text, numeric confidence (engine-owned via `_compute_confidence()`), MITRE confidence, three sample platforms. Timeline remains unpopulated. Threat-intelligence enrichment and `raw_event` parsing are not implemented. MCP and CLI investigation output keys remain unchanged.
+*Already Implemented today (baseline for 1.1 Phases 1–6):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown and standalone HTML renderers), deterministic evidence extraction from normalized alert fields, evidence-based structured analyst reasoning, structured confidence rationale (supporting/limiting factors; normalized evidence only; does not recalculate or fully reproduce the numeric score), structured recommended disposition (two-label controlled vocabulary; advisory only; analyst review always required), Markdown and offline HTML demo reports (evidence + analyst reasoning + confidence rationale + recommended disposition; HTML executive-first with Investigation Status), severity assessment text, numeric confidence (engine-owned via `_compute_confidence()`), MITRE confidence, three sample platforms. Timeline remains unpopulated. PDF export is not implemented. Threat-intelligence enrichment and `raw_event` parsing are not implemented. MCP and CLI investigation output keys remain unchanged.
 
 ## Version 1.2 — Planned / later
 

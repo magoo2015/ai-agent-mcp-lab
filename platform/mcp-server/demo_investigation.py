@@ -2,7 +2,7 @@
 """
 End-to-end portfolio demo: load an alert JSON, invoke investigate_alert
 via the MCP stdio server, build a structured InvestigationReport, and
-render a Markdown SOC investigation report.
+render Markdown and optional standalone HTML investigation reports.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from reports.builder import build_investigation_report  # noqa: E402
+from reports.html_renderer import render_html  # noqa: E402
 from reports.markdown_renderer import render_markdown  # noqa: E402
 from schemas.alert_schema import AlertInput, InvestigationOutput  # noqa: E402
 
@@ -104,7 +105,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Load a normalized alert JSON, invoke investigate_alert via the "
-            "MCP stdio server, and render a Markdown SOC investigation report."
+            "MCP stdio server, and render a Markdown SOC investigation report. "
+            "Optionally write a standalone HTML report from the same object."
         )
     )
     parser.add_argument(
@@ -123,6 +125,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Write the Markdown report to this file instead of stdout.",
+    )
+    parser.add_argument(
+        "--html-output",
+        type=Path,
+        default=None,
+        help=(
+            "Write a standalone HTML investigation report to this path "
+            "(UTF-8). Uses the same InvestigationReport as Markdown."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -147,6 +158,12 @@ def main(argv: list[str] | None = None) -> int:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(markdown, encoding="utf-8")
             print(f"Wrote report to {args.output}", file=sys.stderr)
+
+        if args.html_output is not None:
+            html = render_html(report)
+            args.html_output.parent.mkdir(parents=True, exist_ok=True)
+            args.html_output.write_text(html, encoding="utf-8")
+            print(f"Wrote HTML report to {args.html_output}", file=sys.stderr)
 
     except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

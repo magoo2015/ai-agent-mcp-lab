@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Security Investigation Report — Multiple SSH authentication failures detected against privileged account root from external source.</title>
+<style>
+:root {
+  --text: #1a2332;
+  --muted: #5a6577;
+  --border: #d0d7e2;
+  --surface: #ffffff;
+  --surface-subtle: #f4f6f9;
+  --accent: #3d5a73;
+  --background: #e8ecf1;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { font-size: 16px; }
+body {
+  margin: 0;
+  padding: 1.25rem;
+  background: var(--background);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  line-height: 1.55;
+}
+.report {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 1.75rem 1.5rem 2rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(26, 35, 50, 0.08);
+}
+.report-header {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.report-header h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.report-header .alert-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.report-header .platform-line {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+.report-header .subtitle {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.section {
+  margin: 1.35rem 0;
+}
+.section h2 {
+  margin: 0 0 0.65rem;
+  font-size: 1.15rem;
+  font-weight: 650;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3rem;
+}
+.section h3 {
+  margin: 0.85rem 0 0.45rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.muted {
+  color: var(--muted);
+  font-style: italic;
+}
+.mono,
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+.prose {
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-line;
+}
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0.85rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.status-item {
+  margin: 0;
+}
+.status-item dt {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.status-item dd {
+  margin: 0.15rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.summary-grid {
+  display: grid;
+  grid-template-columns: minmax(7rem, 11rem) 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+.summary-grid dt {
+  margin: 0;
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.summary-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.disposition-card {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+}
+.disposition-badge {
+  display: inline-block;
+  margin: 0 0 0.65rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.disposition-card .review-line {
+  margin: 0.75rem 0 0;
+  font-weight: 650;
+}
+.table-wrap {
+  overflow-x: auto;
+  margin: 0;
+}
+.evidence-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.evidence-table th,
+.evidence-table td {
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.evidence-table thead th {
+  background: var(--surface-subtle);
+  font-weight: 650;
+}
+.evidence-table th[scope="row"] {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.statement-group {
+  margin: 0.75rem 0;
+  padding: 0.65rem 0.75rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.statement-group.assessment {
+  border-left: 3px solid var(--accent);
+}
+.statement-group.alternatives {
+  border-left: 3px solid #8a94a6;
+}
+.statement-group.gaps {
+  border-left: 3px solid #9aa3b2;
+}
+.statement-group.supporting {
+  border-left: 3px solid var(--accent);
+}
+.statement-group.limiting {
+  border-left: 3px solid #8a94a6;
+}
+.statement {
+  margin: 0.55rem 0;
+  padding: 0.35rem 0;
+}
+.statement + .statement {
+  border-top: 1px solid var(--border);
+}
+.statement-id {
+  display: block;
+  margin: 0 0 0.2rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+.reference-list {
+  margin: 0.3rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.content-card {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.mitre-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.mitre-table th,
+.mitre-table td {
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.mitre-table thead th {
+  background: var(--surface-subtle);
+  font-weight: 650;
+}
+.query-block {
+  margin: 0.5rem 0 0.85rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+.query-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.item-list {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+}
+.item-list li {
+  margin: 0.3rem 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.limitations-section {
+  padding: 0.85rem 1rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.report-footer {
+  margin-top: 1.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+.report-footer p {
+  margin: 0.25rem 0;
+}
+@media (max-width: 40rem) {
+  body { padding: 0.65rem; }
+  .report { padding: 1.1rem 0.85rem 1.35rem; }
+  .summary-grid {
+    grid-template-columns: 1fr;
+    gap: 0.15rem 0;
+  }
+  .summary-grid dt { margin-top: 0.45rem; }
+  .status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media print {
+  @page { margin: 0.65in; }
+  body {
+    background: #fff;
+    padding: 0;
+  }
+  .report {
+    max-width: none;
+    box-shadow: none;
+    border: 0;
+    padding: 0;
+  }
+  section,
+  .statement,
+  .disposition-card,
+  .query-block,
+  .statement-group,
+  .content-card,
+  .limitations-section {
+    break-inside: avoid;
+  }
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+  thead {
+    display: table-header-group;
+  }
+  pre,
+  code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+</style>
+</head>
+<body>
+<main class="report">
+<header class="report-header">
+<h1>AI Security Investigation Report</h1>
+<p class="alert-title">Multiple SSH authentication failures detected against privileged account root from external source.</p>
+<p class="platform-line">Platform: wazuh</p>
+<p class="subtitle">Evidence-grounded security investigation summary</p>
+</header>
+<section class="section" aria-labelledby="status-heading">
+<h2 id="status-heading">Investigation Status</h2>
+<dl class="status-grid">
+<div class="status-item"><dt>Disposition</dt><dd>Suspicious Activity</dd></div>
+<div class="status-item"><dt>Severity</dt><dd>high</dd></div>
+<div class="status-item"><dt>Confidence</dt><dd>82</dd></div>
+<div class="status-item"><dt>Analyst Review</dt><dd>Required</dd></div>
+<div class="status-item"><dt>MITRE</dt><dd>T1110</dd></div>
+</dl>
+</section>
+<section class="section" aria-labelledby="overview-heading">
+<h2 id="overview-heading">Alert Overview</h2>
+<dl class="summary-grid">
+<dt>Platform</dt>
+<dd>wazuh</dd>
+<dt>Alert Type</dt>
+<dd>ssh_failed_login</dd>
+<dt>Vendor Severity</dt>
+<dd>high</dd>
+<dt>Confidence</dt>
+<dd>82</dd>
+<dt>Source IP</dt>
+<dd>203.0.113.45</dd>
+<dt>Destination IP</dt>
+<dd>10.0.1.15</dd>
+<dt>Hostname</dt>
+<dd>prod-web-01</dd>
+<dt>Username</dt>
+<dd>root</dd>
+</dl>
+</section>
+<section class="section" aria-labelledby="summary-heading">
+<h2 id="summary-heading">Executive Summary</h2>
+<p class="prose">wazuh reported a ssh_failed_login alert (high severity). Multiple SSH authentication failures detected against privileged account root from external source. Key observables: source IP 203.0.113.45, destination IP 10.0.1.15, host prod-web-01, user root.</p>
+</section>
+<section class="section" aria-labelledby="disposition-heading">
+<h2 id="disposition-heading">Recommended Disposition</h2>
+<div class="disposition-card">
+<div class="disposition-badge">Suspicious Activity</div>
+<p class="prose">The normalized alert contains authentication-failure activity and identifying network, account, or host context. Successful access or downstream compromise cannot be confirmed from the available evidence.</p>
+<p class="reference-list">Supporting Evidence: <code>EVID-002</code>, <code>EVID-004</code>, <code>EVID-007</code>, <code>EVID-005</code>, <code>EVID-006</code>, <code>EVID-008</code></p>
+<p class="review-line">Analyst Review Required: Yes</p>
+</div>
+</section>
+<section class="section" aria-labelledby="evidence-heading">
+<h2 id="evidence-heading">Evidence</h2>
+<div class="table-wrap">
+<table class="evidence-table">
+<thead><tr><th scope="col">ID</th><th scope="col">Kind</th><th scope="col">Category</th><th scope="col">Evidence</th><th scope="col">Value</th><th scope="col">Source</th><th scope="col">Context</th></tr></thead>
+<tbody>
+<tr><th scope="row">EVID-001</th><td>metadata</td><td>Alert Metadata</td><td>Platform</td><td>wazuh</td><td>alert.platform</td><td>Platform that generated the normalized alert.</td></tr>
+<tr><th scope="row">EVID-002</th><td>metadata</td><td>Alert Metadata</td><td>Alert type</td><td>ssh_failed_login</td><td>alert.alert_type</td><td>Normalized alert type.</td></tr>
+<tr><th scope="row">EVID-003</th><td>metadata</td><td>Alert Metadata</td><td>Vendor severity</td><td>high</td><td>alert.severity</td><td>Severity reported by the alert source.</td></tr>
+<tr><th scope="row">EVID-004</th><td>metadata</td><td>Alert Metadata</td><td>Description</td><td>Multiple SSH authentication failures detected against privileged account root from external source.</td><td>alert.description</td><td>Description supplied with the normalized alert.</td></tr>
+<tr><th scope="row">EVID-005</th><td>observable</td><td>Identity</td><td>Username</td><td>root</td><td>alert.observables.username</td><td>Account associated with the alert.</td></tr>
+<tr><th scope="row">EVID-006</th><td>observable</td><td>Host</td><td>Hostname</td><td>prod-web-01</td><td>alert.observables.hostname</td><td>Host associated with the alert.</td></tr>
+<tr><th scope="row">EVID-007</th><td>observable</td><td>Network</td><td>Source IP</td><td>203.0.113.45</td><td>alert.observables.source_ip</td><td>Source IP associated with the alert.</td></tr>
+<tr><th scope="row">EVID-008</th><td>observable</td><td>Network</td><td>Destination IP</td><td>10.0.1.15</td><td>alert.observables.destination_ip</td><td>Destination IP associated with the alert.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="section" aria-labelledby="reasoning-heading">
+<h2 id="reasoning-heading">Analyst Reasoning</h2>
+<div class="statement-group observations">
+<h3>Observations</h3>
+<div class="statement">
+<span class="statement-id">OBS-001</span>
+<p class="prose">The normalized alert reports SSH authentication failures.</p>
+<p class="reference-list">Evidence: <code>EVID-002</code>, <code>EVID-004</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">OBS-002</span>
+<p class="prose">The alert contains a source IP.</p>
+<p class="reference-list">Evidence: <code>EVID-007</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">OBS-003</span>
+<p class="prose">The alert contains a destination IP.</p>
+<p class="reference-list">Evidence: <code>EVID-008</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">OBS-004</span>
+<p class="prose">The alert contains a username.</p>
+<p class="reference-list">Evidence: <code>EVID-005</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">OBS-005</span>
+<p class="prose">The alert contains a hostname.</p>
+<p class="reference-list">Evidence: <code>EVID-006</code></p>
+</div>
+</div>
+<div class="statement-group assessment">
+<h3>Assessment</h3>
+<div class="statement">
+<span class="statement-id">ASM-001</span>
+<p class="prose">The reported behavior is consistent with repeated SSH authentication failures.</p>
+<p class="reference-list">Evidence: <code>EVID-002</code>, <code>EVID-004</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">ASM-002</span>
+<p class="prose">The normalized evidence does not establish that authentication succeeded.</p>
+</div>
+</div>
+<div class="statement-group alternatives">
+<h3>Alternative Explanations</h3>
+<div class="statement">
+<span class="statement-id">ALT-001</span>
+<p class="prose">Automated internet scanning or password guessing.</p>
+</div>
+<div class="statement">
+<span class="statement-id">ALT-002</span>
+<p class="prose">Authorized security testing or administrative validation.</p>
+</div>
+<div class="statement">
+<span class="statement-id">ALT-003</span>
+<p class="prose">A vendor detection triggered on repeated but unsuccessful authentication activity.</p>
+</div>
+</div>
+<div class="statement-group gaps">
+<h3>Evidence Gaps</h3>
+<div class="statement">
+<span class="statement-id">GAP-001</span>
+<p class="prose">No successful-authentication telemetry is included in the normalized alert.</p>
+</div>
+<div class="statement">
+<span class="statement-id">GAP-002</span>
+<p class="prose">No post-authentication process telemetry is included.</p>
+</div>
+<div class="statement">
+<span class="statement-id">GAP-003</span>
+<p class="prose">No lateral-movement telemetry is included.</p>
+</div>
+</div>
+</section>
+<section class="section" aria-labelledby="confidence-heading">
+<h2 id="confidence-heading">Confidence Rationale</h2>
+<div class="statement-group supporting">
+<h3>Supporting Factors</h3>
+<div class="statement">
+<span class="statement-id">SUP-001</span>
+<p class="prose">Authentication-failure activity is reported in the normalized alert.</p>
+<p class="reference-list">Evidence: <code>EVID-002</code>, <code>EVID-004</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">SUP-002</span>
+<p class="prose">A source IP is identified in the normalized evidence.</p>
+<p class="reference-list">Evidence: <code>EVID-007</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">SUP-003</span>
+<p class="prose">A target username is identified.</p>
+<p class="reference-list">Evidence: <code>EVID-005</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">SUP-004</span>
+<p class="prose">A destination host is identified.</p>
+<p class="reference-list">Evidence: <code>EVID-006</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">SUP-005</span>
+<p class="prose">A destination IP is identified.</p>
+<p class="reference-list">Evidence: <code>EVID-008</code></p>
+</div>
+</div>
+<div class="statement-group limiting">
+<h3>Limiting Factors</h3>
+<div class="statement">
+<span class="statement-id">LIM-001</span>
+<p class="prose">Successful authentication cannot be confirmed from normalized evidence alone.</p>
+</div>
+<div class="statement">
+<span class="statement-id">LIM-002</span>
+<p class="prose">Post-authentication endpoint activity is not available in the normalized alert.</p>
+</div>
+<div class="statement">
+<span class="statement-id">LIM-003</span>
+<p class="prose">Containment or response status is not available.</p>
+</div>
+</div>
+<div class="statement-group overall">
+<h3>Overall</h3>
+<p class="prose">The available normalized identifiers provide grounding for the authentication investigation, while successful-login and post-authentication telemetry remain unavailable. These factors provide context for the reported confidence score but do not reproduce its calculation.</p>
+</div>
+</section>
+<section class="section" aria-labelledby="severity-heading">
+<h2 id="severity-heading">Severity Assessment</h2>
+<div class="content-card"><p class="prose">Vendor severity &#x27;high&#x27; indicates elevated priority. Failed SSH logins warrant review for brute-force activity, but impact depends on whether authentication eventually succeeded and which accounts were targeted.</p></div>
+</section>
+<section class="section" aria-labelledby="mitre-heading">
+<h2 id="mitre-heading">MITRE ATT&amp;CK Mapping</h2>
+<div class="table-wrap">
+<table class="mitre-table">
+<thead><tr><th scope="col">Technique ID</th><th scope="col">Technique name</th><th scope="col">Tactic</th><th scope="col">Confidence</th><th scope="col">Rationale</th></tr></thead>
+<tbody>
+<tr><td>T1110</td><td>Brute Force</td><td>Credential Access</td><td>medium</td><td>Repeated or failed SSH authentication attempts align with credential brute-force behavior; confirm volume, targeting, and success before escalation.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="section" aria-labelledby="queries-heading">
+<h2 id="queries-heading">Recommended Investigation Queries</h2>
+<h3>QRadar AQL</h3>
+<div class="query-block"><pre><code>SELECT sourceip, destinationip, username, LOGSOURCETYPENAME(devicetype), starttime, category, qid FROM events WHERE sourceip = &#x27;203.0.113.45&#x27; LAST 24 HOURS</code></pre></div>
+<div class="query-block"><pre><code>SELECT sourceip, destinationip, destinationport, starttime FROM events WHERE destinationip = &#x27;10.0.1.15&#x27; LAST 24 HOURS</code></pre></div>
+<div class="query-block"><pre><code>SELECT LOGSOURCETYPENAME(devicetype), sourceip, username, starttime, category FROM events WHERE devicename ILIKE &#x27;%prod-web-01%&#x27; LAST 7 DAYS</code></pre></div>
+<div class="query-block"><pre><code>SELECT username, sourceip, LOGSOURCETYPENAME(devicetype), starttime, category FROM events WHERE username ILIKE &#x27;%root%&#x27; LAST 7 DAYS</code></pre></div>
+<div class="query-block"><pre><code>SELECT sourceip, username, COUNT(*) AS failures FROM events WHERE category = 1515 AND LOGSOURCETYPENAME(devicetype) ILIKE &#x27;%Linux%&#x27; LAST 24 HOURS GROUP BY sourceip, username HAVING COUNT(*) &gt; 10</code></pre></div>
+<h3>Microsoft Sentinel KQL</h3>
+<div class="query-block"><pre><code>SecurityEvent
+| where TimeGenerated &gt; ago(24h)
+| where IpAddress == &quot;203.0.113.45&quot; or SourceIP == &quot;203.0.113.45&quot;
+| project TimeGenerated, Computer, Account, IpAddress, Activity</code></pre></div>
+<div class="query-block"><pre><code>CommonSecurityLog
+| where TimeGenerated &gt; ago(24h)
+| where DestinationIP == &quot;10.0.1.15&quot;
+| summarize count() by DeviceVendor, DeviceProduct, Activity</code></pre></div>
+<div class="query-block"><pre><code>Heartbeat
+| where TimeGenerated &gt; ago(7d)
+| where Computer contains &quot;prod-web-01&quot;
+| summarize arg_max(TimeGenerated, *) by Computer</code></pre></div>
+<div class="query-block"><pre><code>SigninLogs
+| where TimeGenerated &gt; ago(7d)
+| where UserPrincipalName contains &quot;root&quot; or Account contains &quot;root&quot;
+| project TimeGenerated, UserPrincipalName, IPAddress, ResultType, AppDisplayName</code></pre></div>
+<div class="query-block"><pre><code>SecurityEvent
+| where TimeGenerated &gt; ago(24h)
+| where EventID == 4625
+| summarize FailureCount = count() by IpAddress, Account
+| where FailureCount &gt; 10</code></pre></div>
+<h3>Microsoft Defender Advanced Hunting KQL</h3>
+<div class="query-block"><pre><code>DeviceNetworkEvents
+| where Timestamp &gt; ago(24h)
+| where RemoteIP == &quot;203.0.113.45&quot; or InitiatingProcessRemoteIP == &quot;203.0.113.45&quot;
+| project Timestamp, DeviceName, ActionType, RemoteIP, InitiatingProcessFileName</code></pre></div>
+<div class="query-block"><pre><code>DeviceNetworkEvents
+| where Timestamp &gt; ago(24h)
+| where RemoteIP == &quot;10.0.1.15&quot;
+| project Timestamp, DeviceName, RemoteIP, RemotePort, InitiatingProcessFileName</code></pre></div>
+<div class="query-block"><pre><code>DeviceInfo
+| where DeviceName contains &quot;prod-web-01&quot;
+| project Timestamp, DeviceName, OSPlatform, PublicIP, ExposureLevel</code></pre></div>
+<div class="query-block"><pre><code>DeviceLogonEvents
+| where Timestamp &gt; ago(7d)
+| where AccountName contains &quot;root&quot;
+| project Timestamp, DeviceName, AccountName, LogonType, RemoteIP</code></pre></div>
+<div class="query-block"><pre><code>DeviceLogonEvents
+| where Timestamp &gt; ago(24h)
+| where LogonType in (&#x27;RemoteInteractive&#x27;, &#x27;Network&#x27;)
+| where ActionType == &#x27;LogonFailed&#x27;
+| summarize FailureCount = count() by RemoteIP, AccountName</code></pre></div>
+<h3>OpenSearch / DQL</h3>
+<div class="query-block"><pre><code>source.ip: &quot;203.0.113.45&quot; AND @timestamp:[now-24h TO now]</code></pre></div>
+<div class="query-block"><pre><code>destination.ip: &quot;10.0.1.15&quot; AND @timestamp:[now-24h TO now]</code></pre></div>
+<div class="query-block"><pre><code>host.name: &quot;prod-web-01&quot; AND @timestamp:[now-7d TO now]</code></pre></div>
+<div class="query-block"><pre><code>user.name: &quot;root&quot; AND @timestamp:[now-7d TO now]</code></pre></div>
+<div class="query-block"><pre><code>event.action: &quot;authentication_failure&quot; AND event.category: &quot;authentication&quot; AND @timestamp:[now-24h TO now]</code></pre></div>
+</section>
+<section class="section" aria-labelledby="next-steps-heading">
+<h2 id="next-steps-heading">Next Investigation Steps</h2>
+<ul class="item-list">
+<li>Validate whether any successful SSH logins occurred from the source IP after failures.</li>
+<li>Check if the targeted username is a valid local account or a common brute-force target (root, admin).</li>
+<li>Review firewall and geo-IP context; block or rate-limit if attack volume is sustained.</li>
+<li>Search for lateral movement or credential reuse if a successful login is confirmed.</li>
+</ul>
+</section>
+<section class="section" aria-labelledby="detection-heading">
+<h2 id="detection-heading">Detection Engineering Opportunities</h2>
+<ul class="item-list">
+<li>Threshold-based detection for repeated SSH authentication failures from a single source IP.</li>
+<li>Correlation rule linking failed logins to successful logins from the same source within a short window.</li>
+<li>Geo-velocity or impossible-travel check if successful authentication follows brute-force patterns.</li>
+</ul>
+</section>
+<section class="section limitations-section" aria-labelledby="limitations-heading">
+<h2 id="limitations-heading">Analysis Limitations</h2>
+<ul class="item-list">
+<li>Offline v1 framework — no live SIEM, EDR, or email security API queries were executed.</li>
+<li>MITRE mappings are deterministic templates, not ML-classified or vendor-validated attributions.</li>
+<li>Recommended queries are example pivots; field names and log sources vary by deployment.</li>
+</ul>
+</section>
+<footer class="report-footer">
+<p>Generated by offline SOC Investigation Tools MCP server</p>
+<p>This report supports analyst review and does not perform automated incident closure or containment.</p>
+</footer>
+</main>
+</body>
+</html>
