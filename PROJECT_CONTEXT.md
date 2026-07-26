@@ -359,9 +359,9 @@ Console Output / file  (demo_investigation.py; examples in docs/demo-output/)
 Inside `investigate_alert`, MITRE mapping, query generation, severity, confidence,
 next steps, detection opportunities, and limitations are unchanged. The report
 layer copies that package into structured fields, attaches deterministic evidence,
-evidence-linked analyst reasoning, and structured confidence rationale from
-normalized `AlertInput` fields only, and renders Markdown; it does not recalculate
-investigation logic or parse `raw_event`.
+evidence-linked analyst reasoning, structured confidence rationale, and a
+report-only recommended disposition from normalized `AlertInput` fields only, and
+renders Markdown; it does not recalculate investigation logic or parse `raw_event`.
 
 **Evidence (Implemented — Version 1.1 Phase 2):** `extract_evidence(alert)` builds
 `EvidenceItem` rows (`EVID-001`, `EVID-002`, …) from present normalized metadata
@@ -391,12 +391,27 @@ context for the reported numeric confidence score using normalized evidence
 only — it does **not** recalculate, validate, or mathematically reproduce
 `_compute_confidence()`. Inputs such as alert-type familiarity, `raw_event`
 presence, and MITRE confidence that may affect the numeric score are **not**
-necessarily reflected in the rationale. Disposition and timeline remain
-unpopulated. MCP `investigate_alert` and CLI JSON output contracts are unchanged
-(evidence, reasoning, and confidence rationale are report-layer only).
+necessarily reflected in the rationale.
 
-`InvestigationReport` still reserves empty expansion points for timeline and
-disposition — not yet populated.
+**Recommended disposition (Implemented — Version 1.1 Phase 5):**
+`build_recommended_disposition(alert, evidence)` populates structured
+`RecommendedDisposition` with a controlled two-label vocabulary
+(`Suspicious Activity` / `Insufficient Evidence`), a fixed rationale template,
+optional evidence-grounded `EVID-###` references, and
+`analyst_review_required=True` on every Version 1.1 path. Disposition is
+deterministic, advisory, and report-only — it does **not** close incidents,
+trigger containment, disable accounts, or change confidence, severity, or
+MITRE. Scenario handlers cover `ssh_failed_login`, `phishing_email`, and
+`suspicious_process`; unknown alert types always return `Insufficient Evidence`
+(generic observables alone are not enough). Benign, likely-malicious,
+true-positive, and false-positive labels are intentionally absent. No
+confidence or severity thresholds and no `raw_event` parsing. Timeline remains
+unpopulated. MCP `investigate_alert` and CLI JSON output contracts are unchanged
+(evidence, reasoning, confidence rationale, and disposition are report-layer
+only).
+
+`InvestigationReport` still reserves an empty expansion point for timeline —
+not yet populated.
 
 MCP tools can also be called independently:
 
@@ -753,12 +768,12 @@ Near-term investigation-report and demo improvements (treat as **Planned** unles
 | Analyst reasoning | **Implemented (Phase 3)** — structured `AnalystReasoning` with evidence-linked statements; deterministic scenario templates (SSH / phishing / suspicious process) + conservative unknown fallback; Markdown after Evidence; no LLM; MCP/CLI contracts unchanged |
 | Confidence assessment | **Implemented (Phase 4)** — structured `ConfidenceRationale` (`SUP-###` / `LIM-###`) from normalized evidence; context for (not a reproduction of) `_compute_confidence()`; Markdown after Analyst Reasoning; score remains engine-owned; MCP/CLI contracts unchanged |
 | Investigation timelines | Planned expansion point on `InvestigationReport` (empty; not populated) |
-| Final disposition | Planned expansion point (optional field reserved, not populated) |
+| Final disposition | **Implemented (Phase 5)** — structured report-only `RecommendedDisposition` (`Suspicious Activity` / `Insufficient Evidence`); evidence-grounded `EVID-###` refs; deterministic scenario handlers + conservative unknown fallback; analyst review always required; no benign/likely-malicious/TP/FP labels; no automated closure or containment; no confidence/severity thresholds; no `raw_event` parsing; MCP/CLI contracts unchanged |
 | Severity assessment | Deeper, evidence-tied severity narrative |
 | Interactive demo runner | Improve `demo_investigation.py` UX / multi-sample flows |
 | Platform-specific investigations | Stronger Wazuh / Defender / Proofpoint (and related) specialization |
 
-*Already Implemented today (baseline for 1.1 Phases 1–4):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown renderer), deterministic evidence extraction from normalized alert fields, evidence-based structured analyst reasoning, structured confidence rationale (supporting/limiting factors; normalized evidence only; does not recalculate or fully reproduce the numeric score), Markdown demo reports (evidence + analyst reasoning + confidence rationale), severity assessment text, numeric confidence (engine-owned via `_compute_confidence()`), MITRE confidence, three sample platforms. Timeline and disposition remain unpopulated. Threat-intelligence enrichment and `raw_event` parsing are not implemented. MCP and CLI investigation output keys remain unchanged.
+*Already Implemented today (baseline for 1.1 Phases 1–5):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown renderer), deterministic evidence extraction from normalized alert fields, evidence-based structured analyst reasoning, structured confidence rationale (supporting/limiting factors; normalized evidence only; does not recalculate or fully reproduce the numeric score), structured recommended disposition (two-label controlled vocabulary; advisory only; analyst review always required), Markdown demo reports (evidence + analyst reasoning + confidence rationale + recommended disposition), severity assessment text, numeric confidence (engine-owned via `_compute_confidence()`), MITRE confidence, three sample platforms. Timeline remains unpopulated. Threat-intelligence enrichment and `raw_event` parsing are not implemented. MCP and CLI investigation output keys remain unchanged.
 
 ## Version 1.2 — Planned / later
 

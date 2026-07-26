@@ -16,18 +16,26 @@ from pydantic import ValidationError
 
 from reports.builder import build_investigation_report
 from reports.confidence import build_confidence_rationale
+from reports.disposition import build_recommended_disposition
 from reports.evidence import extract_evidence
 from reports.markdown_renderer import render_markdown
 from reports.models import (
     AnalystReasoning,
     ConfidenceRationale,
     ConfidenceStatement,
+    DispositionLabel,
     EvidenceItem,
     InvestigationReport,
     ReasoningStatement,
+    RecommendedDisposition,
 )
 from reports.reasoning import build_analyst_reasoning
-from schemas.alert_schema import AlertInput, AlertObservables, InvestigationOutput
+from schemas.alert_schema import (
+    AlertInput,
+    AlertObservables,
+    InvestigationOutput,
+    MitreMapping,
+)
 from tools.investigate_alert import investigate_alert
 
 _ROOT = Path(__file__).resolve().parent
@@ -52,6 +60,7 @@ _MAJOR_HEADINGS = (
     "## Evidence",
     "## Analyst Reasoning",
     "## Confidence Rationale",
+    "## Recommended Disposition",
     "## Executive Summary",
     "## Severity Assessment",
     "## MITRE ATT&CK Mapping",
@@ -59,6 +68,25 @@ _MAJOR_HEADINGS = (
     "## Next Investigation Steps",
     "## Detection Engineering Opportunities",
     "## Analysis Limitations",
+)
+
+_PROHIBITED_DISPOSITION_PHRASES = (
+    "confirmed compromise",
+    "confirmed malicious",
+    "true positive",
+    "false positive",
+    "attack succeeded",
+    "successful intrusion",
+    "user clicked",
+    "credentials stolen",
+    "malware executed",
+    "host infected",
+    "mailbox compromised",
+    "close the incident",
+    "contain the host",
+    "disable the account",
+    "the activity is benign",
+    "likely malicious",
 )
 
 _PROHIBITED_CONFIDENCE_PHRASES = (
@@ -163,6 +191,26 @@ def _all_confidence_refs(rationale: ConfidenceRationale) -> list[str]:
         for statement in section:
             ids.extend(statement.evidence_ids)
     return ids
+
+
+def _disposition_blob(disposition: RecommendedDisposition) -> str:
+    return (
+        f"{disposition.disposition.value} {disposition.rationale} "
+        f"{' '.join(disposition.evidence_ids)}"
+    ).lower()
+
+
+def _alert_with_observables(
+    alert_type: str,
+    **observables: str,
+) -> AlertInput:
+    return AlertInput(
+        platform="custom",
+        alert_type=alert_type,
+        severity="medium",
+        description="Test alert description.",
+        observables=AlertObservables(**observables),
+    )
 
 
 class EvidenceExtractionTests(unittest.TestCase):
@@ -728,6 +776,20 @@ class InvestigationReportTests(unittest.TestCase):
         self.assertGreater(len(self.report.confidence_rationale.supporting_factors), 0)
         self.assertGreater(len(self.report.confidence_rationale.limiting_factors), 0)
 
+    def test_builder_populates_recommended_disposition(self) -> None:
+        self.assertIsNotNone(self.report.disposition)
+        assert self.report.disposition is not None
+        expected = build_recommended_disposition(self.alert, self.report.evidence)
+        self.assertEqual(
+            self.report.disposition.model_dump(),
+            expected.model_dump(),
+        )
+        self.assertEqual(
+            self.report.disposition.disposition,
+            DispositionLabel.SUSPICIOUS_ACTIVITY,
+        )
+        self.assertTrue(self.report.disposition.analyst_review_required)
+
     def test_report_serializes_to_json_compatible_data(self) -> None:
         payload = self.report.model_dump()
         encoded = json.dumps(payload)
@@ -744,17 +806,18 @@ class InvestigationReportTests(unittest.TestCase):
             restored["confidence_rationale"]["supporting_factors"][0]["statement_id"],
             "SUP-001",
         )
+        self.assertEqual(
+            restored["disposition"]["disposition"],
+            "Suspicious Activity",
+        )
         InvestigationReport.model_validate(restored)
 
     def test_future_list_sections_default_empty(self) -> None:
         self.assertEqual(self.report.timeline, [])
 
-    def test_future_optional_sections_default_none(self) -> None:
-        self.assertIsNone(self.report.disposition)
-
-    def test_no_disposition_or_timeline(self) -> None:
+    def test_timeline_remains_unpopulated(self) -> None:
         self.assertEqual(self.report.timeline, [])
-        self.assertIsNone(self.report.disposition)
+        self.assertIsNotNone(self.report.disposition)
 
     def test_severity_confidence_mitre_queries_unchanged(self) -> None:
         self.assertEqual(
@@ -933,7 +996,8 @@ class InvestigationReportTests(unittest.TestCase):
     def test_empty_optional_sections_do_not_malform_markdown(self) -> None:
         markdown = render_markdown(self.report)
         self.assertNotIn("## Timeline", markdown)
-        self.assertNotIn("## Disposition", markdown)
+        self.assertNotIn("## Disposition\n", markdown)
+        self.assertIn("## Recommended Disposition", markdown)
         self.assertNotIn("TBD", markdown)
         self.assertNotIn("not implemented", markdown)
         self.assertNotIn("coming soon", markdown)
@@ -947,6 +1011,7 @@ class InvestigationReportTests(unittest.TestCase):
                 "evidence": [],
                 "analyst_reasoning": None,
                 "confidence_rationale": None,
+                "disposition": None,
             }
         )
         empty_md = render_markdown(empty_report)
@@ -956,6 +1021,7 @@ class InvestigationReportTests(unittest.TestCase):
         self.assertNotIn("## Evidence", empty_md)
         self.assertNotIn("## Analyst Reasoning", empty_md)
         self.assertNotIn("## Confidence Rationale", empty_md)
+        self.assertNotIn("## Recommended Disposition", empty_md)
 
     def test_investigation_engine_output_structure_unchanged(self) -> None:
         payload = self.output.model_dump()
@@ -1266,7 +1332,14 @@ class ConfidenceBuildTests(unittest.TestCase):
             expected_reasoning.model_dump(),
         )
         self.assertEqual(report.timeline, [])
-        self.assertIsNone(report.disposition)
+        assert report.disposition is not None
+        expected_disposition = build_recommended_disposition(
+            self.ssh_alert, expected_evidence
+        )
+        self.assertEqual(
+            report.disposition.model_dump(),
+            expected_disposition.model_dump(),
+        )
         self.assertEqual(set(output.model_dump().keys()), _REQUIRED_OUTPUT_KEYS)
 
 
@@ -1352,9 +1425,538 @@ class ConfidenceMarkdownTests(unittest.TestCase):
         overview = markdown.split("## Alert Overview")[1].split("## Evidence")[0]
         self.assertIn(f"**Confidence:** {self.report.confidence}", overview)
         confidence_section = markdown.split("## Confidence Rationale")[1].split(
-            "## Executive Summary"
+            "## Recommended Disposition"
         )[0]
         self.assertNotIn(str(self.report.confidence), confidence_section)
+
+
+class DispositionModelTests(unittest.TestCase):
+    def test_valid_enum_values(self) -> None:
+        self.assertEqual(
+            DispositionLabel.SUSPICIOUS_ACTIVITY.value, "Suspicious Activity"
+        )
+        self.assertEqual(
+            DispositionLabel.INSUFFICIENT_EVIDENCE.value, "Insufficient Evidence"
+        )
+
+    def test_invalid_enum_rejection(self) -> None:
+        with self.assertRaises(ValidationError):
+            RecommendedDisposition(
+                disposition="Likely Malicious",  # type: ignore[arg-type]
+                rationale="Should fail.",
+            )
+
+    def test_required_rationale(self) -> None:
+        with self.assertRaises(ValidationError):
+            RecommendedDisposition(
+                disposition=DispositionLabel.SUSPICIOUS_ACTIVITY,
+            )  # type: ignore[call-arg]
+
+    def test_default_empty_evidence_list(self) -> None:
+        disposition = RecommendedDisposition(
+            disposition=DispositionLabel.INSUFFICIENT_EVIDENCE,
+            rationale="Not enough context.",
+        )
+        self.assertEqual(disposition.evidence_ids, [])
+        self.assertTrue(disposition.analyst_review_required)
+
+    def test_no_shared_mutable_defaults(self) -> None:
+        first = RecommendedDisposition(
+            disposition=DispositionLabel.INSUFFICIENT_EVIDENCE,
+            rationale="a",
+        )
+        second = RecommendedDisposition(
+            disposition=DispositionLabel.INSUFFICIENT_EVIDENCE,
+            rationale="b",
+        )
+        first.evidence_ids.append("EVID-001")
+        self.assertEqual(second.evidence_ids, [])
+
+    def test_analyst_review_defaults_true(self) -> None:
+        disposition = RecommendedDisposition(
+            disposition=DispositionLabel.SUSPICIOUS_ACTIVITY,
+            rationale="Context present.",
+            evidence_ids=["EVID-001"],
+        )
+        self.assertTrue(disposition.analyst_review_required)
+
+    def test_json_compatible_serialization_and_round_trip(self) -> None:
+        disposition = RecommendedDisposition(
+            disposition=DispositionLabel.SUSPICIOUS_ACTIVITY,
+            rationale="Grounded recommendation.",
+            evidence_ids=["EVID-002", "EVID-004"],
+        )
+        payload = disposition.model_dump()
+        encoded = json.dumps(payload)
+        restored = json.loads(encoded)
+        RecommendedDisposition.model_validate(restored)
+        self.assertEqual(restored["disposition"], "Suspicious Activity")
+
+    def test_investigation_report_round_trip_with_disposition(self) -> None:
+        alert = _load_sample_alert(_SAMPLE_SSH)
+        output = investigate_alert(alert)
+        report = build_investigation_report(alert, output)
+        restored = InvestigationReport.model_validate(report.model_dump())
+        assert report.disposition is not None
+        assert restored.disposition is not None
+        self.assertEqual(
+            restored.disposition.model_dump(),
+            report.disposition.model_dump(),
+        )
+
+
+class DispositionBuildTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ssh_alert = _load_sample_alert(_SAMPLE_SSH)
+        self.phishing_alert = _load_sample_alert(_SAMPLE_PROOFPOINT)
+        self.process_alert = _load_sample_alert(_SAMPLE_DEFENDER)
+        self.ssh_evidence = extract_evidence(self.ssh_alert)
+        self.phishing_evidence = extract_evidence(self.phishing_alert)
+        self.process_evidence = extract_evidence(self.process_alert)
+        self.ssh_disposition = build_recommended_disposition(
+            self.ssh_alert, self.ssh_evidence
+        )
+        self.phishing_disposition = build_recommended_disposition(
+            self.phishing_alert, self.phishing_evidence
+        )
+        self.process_disposition = build_recommended_disposition(
+            self.process_alert, self.process_evidence
+        )
+
+    def _assert_suspicious(
+        self,
+        alert_type: str,
+        **observables: str,
+    ) -> RecommendedDisposition:
+        alert = _alert_with_observables(alert_type, **observables)
+        evidence = extract_evidence(alert)
+        disposition = build_recommended_disposition(alert, evidence)
+        self.assertEqual(
+            disposition.disposition, DispositionLabel.SUSPICIOUS_ACTIVITY
+        )
+        self.assertTrue(disposition.analyst_review_required)
+        self.assertTrue(disposition.evidence_ids)
+        known = {item.evidence_id for item in evidence}
+        for evid in disposition.evidence_ids:
+            self.assertIn(evid, known)
+        return disposition
+
+    def _assert_insufficient(
+        self,
+        alert_type: str,
+        **observables: str,
+    ) -> RecommendedDisposition:
+        alert = AlertInput(
+            platform="custom",
+            alert_type=alert_type,
+            severity="medium",
+            description="Categorized alert without driving observables.",
+            observables=AlertObservables(**observables),
+        )
+        evidence = extract_evidence(alert)
+        disposition = build_recommended_disposition(alert, evidence)
+        self.assertEqual(
+            disposition.disposition, DispositionLabel.INSUFFICIENT_EVIDENCE
+        )
+        self.assertTrue(disposition.analyst_review_required)
+        self.assertEqual(disposition.evidence_ids, [])
+        return disposition
+
+    def test_ssh_source_ip_only_suspicious(self) -> None:
+        self._assert_suspicious("ssh_failed_login", source_ip="203.0.113.10")
+
+    def test_ssh_username_only_suspicious(self) -> None:
+        self._assert_suspicious("ssh_failed_login", username="admin")
+
+    def test_ssh_hostname_only_suspicious(self) -> None:
+        self._assert_suspicious("ssh_failed_login", hostname="host-01")
+
+    def test_ssh_destination_ip_only_suspicious(self) -> None:
+        self._assert_suspicious("ssh_failed_login", destination_ip="10.0.0.5")
+
+    def test_ssh_no_relevant_observables_insufficient(self) -> None:
+        disposition = self._assert_insufficient("ssh_failed_login")
+        self.assertIn("authentication-failure activity", disposition.rationale.lower())
+
+    def test_ssh_sample_suspicious_and_no_compromise_claims(self) -> None:
+        self.assertEqual(
+            self.ssh_disposition.disposition,
+            DispositionLabel.SUSPICIOUS_ACTIVITY,
+        )
+        blob = _disposition_blob(self.ssh_disposition)
+        self.assertNotIn("brute force confirmed", blob)
+        self.assertNotIn("account compromised", blob)
+        self.assertNotIn("login succeeded", blob)
+        self.assertNotIn("host compromised", blob)
+        self.assertTrue(self.ssh_disposition.analyst_review_required)
+
+    def test_phishing_sender_only_suspicious(self) -> None:
+        self._assert_suspicious("phishing_email", sender="bad@example.test")
+
+    def test_phishing_recipient_only_suspicious(self) -> None:
+        self._assert_suspicious("phishing_email", recipient="user@corp.test")
+
+    def test_phishing_url_only_suspicious(self) -> None:
+        self._assert_suspicious("phishing_email", url="http://phish.test/login")
+
+    def test_phishing_hostname_only_suspicious(self) -> None:
+        self._assert_suspicious("phishing_email", hostname="mail-gw")
+
+    def test_phishing_no_relevant_observables_insufficient(self) -> None:
+        disposition = self._assert_insufficient("phishing_email")
+        self.assertIn("suspicious email activity", disposition.rationale.lower())
+
+    def test_phishing_sample_no_click_or_compromise_claims(self) -> None:
+        self.assertEqual(
+            self.phishing_disposition.disposition,
+            DispositionLabel.SUSPICIOUS_ACTIVITY,
+        )
+        blob = _disposition_blob(self.phishing_disposition)
+        self.assertNotIn("user clicked", blob)
+        self.assertNotIn("credentials submitted", blob)
+        self.assertNotIn("message delivered", blob)
+        self.assertNotIn("mailbox compromised", blob)
+        self.assertTrue(self.phishing_disposition.analyst_review_required)
+
+    def test_process_name_only_suspicious(self) -> None:
+        self._assert_suspicious("suspicious_process", process_name="evil.exe")
+
+    def test_process_hostname_only_suspicious(self) -> None:
+        self._assert_suspicious("suspicious_process", hostname="wkstn-01")
+
+    def test_process_file_hash_only_suspicious(self) -> None:
+        self._assert_suspicious(
+            "suspicious_process",
+            file_hash="aabbccddeeff00112233445566778899",
+        )
+
+    def test_process_url_only_suspicious(self) -> None:
+        self._assert_suspicious("suspicious_process", url="http://c2.test/beacon")
+
+    def test_process_username_only_suspicious(self) -> None:
+        self._assert_suspicious("suspicious_process", username="localadmin")
+
+    def test_process_source_ip_only_suspicious(self) -> None:
+        self._assert_suspicious("suspicious_process", source_ip="198.51.100.9")
+
+    def test_process_no_relevant_observables_insufficient(self) -> None:
+        disposition = self._assert_insufficient("suspicious_process")
+        self.assertIn("suspicious process activity", disposition.rationale.lower())
+
+    def test_process_never_likely_malicious_and_no_execution_claims(self) -> None:
+        self.assertEqual(
+            self.process_disposition.disposition,
+            DispositionLabel.SUSPICIOUS_ACTIVITY,
+        )
+        self.assertNotEqual(
+            self.process_disposition.disposition.value, "Likely Malicious"
+        )
+        blob = _disposition_blob(self.process_disposition)
+        self.assertNotIn("malware confirmed", blob)
+        self.assertNotIn("malware executed", blob)
+        self.assertNotIn("persistence established", blob)
+        self.assertNotIn("command and control confirmed", blob)
+        self.assertNotIn("host infected", blob)
+        self.assertNotIn("endpoint compromised", blob)
+        self.assertTrue(self.process_disposition.analyst_review_required)
+
+    def test_unknown_always_insufficient_even_with_observables(self) -> None:
+        alert = AlertInput(
+            platform="custom",
+            alert_type="unusual_dns_tunnel",
+            severity="high",
+            description="Odd DNS patterns observed.",
+            observables=AlertObservables(
+                source_ip="203.0.113.99",
+                hostname="resolver-01",
+                url="http://example.test/path",
+                username="svc-dns",
+                process_name="dig",
+                sender="ops@example.test",
+            ),
+        )
+        evidence = extract_evidence(alert)
+        disposition = build_recommended_disposition(alert, evidence)
+        self.assertEqual(
+            disposition.disposition, DispositionLabel.INSUFFICIENT_EVIDENCE
+        )
+        self.assertEqual(disposition.evidence_ids, [])
+        self.assertTrue(disposition.analyst_review_required)
+        blob = _disposition_blob(disposition)
+        self.assertIn("scenario-specific evidence", blob)
+        self.assertNotIn("authentication-failure", blob)
+        self.assertNotIn("suspicious email", blob)
+        self.assertNotIn("suspicious process", blob)
+
+    def test_all_scenario_outputs_require_analyst_review(self) -> None:
+        for disposition in (
+            self.ssh_disposition,
+            self.phishing_disposition,
+            self.process_disposition,
+        ):
+            self.assertTrue(disposition.analyst_review_required)
+        unknown = build_recommended_disposition(
+            _alert_with_observables("weird_alert", source_ip="1.2.3.4"),
+            extract_evidence(
+                _alert_with_observables("weird_alert", source_ip="1.2.3.4")
+            ),
+        )
+        self.assertTrue(unknown.analyst_review_required)
+
+    def test_determinism_across_repeated_builds(self) -> None:
+        first = build_recommended_disposition(self.ssh_alert, self.ssh_evidence)
+        second = build_recommended_disposition(self.ssh_alert, self.ssh_evidence)
+        self.assertEqual(first.model_dump(), second.model_dump())
+
+    def test_evidence_reference_order_deterministic(self) -> None:
+        by_source = {item.source: item.evidence_id for item in self.ssh_evidence}
+        expected = [
+            by_source["alert.alert_type"],
+            by_source["alert.description"],
+            by_source["alert.observables.source_ip"],
+            by_source["alert.observables.username"],
+            by_source["alert.observables.hostname"],
+            by_source["alert.observables.destination_ip"],
+        ]
+        self.assertEqual(self.ssh_disposition.evidence_ids, expected)
+
+    def test_lookup_does_not_rely_on_fixed_evidence_numbers(self) -> None:
+        alert = AlertInput(
+            platform="custom",
+            alert_type="ssh_failed_login",
+            severity="high",
+            description="Auth failures.",
+            observables=AlertObservables(
+                source_ip="203.0.113.99",
+                username="admin",
+            ),
+        )
+        evidence = extract_evidence(alert)
+        by_source = {item.source: item.evidence_id for item in evidence}
+        disposition = build_recommended_disposition(alert, evidence)
+        source_ip_id = by_source["alert.observables.source_ip"]
+        username_id = by_source["alert.observables.username"]
+        self.assertIn(source_ip_id, disposition.evidence_ids)
+        self.assertIn(username_id, disposition.evidence_ids)
+        self.assertNotEqual(source_ip_id, "EVID-007")
+
+    def test_duplicate_evidence_ids_removed_first_seen_order(self) -> None:
+        evidence = [
+            EvidenceItem(
+                evidence_id="EVID-001",
+                kind="metadata",
+                category="Alert Metadata",
+                label="Alert type",
+                value="ssh_failed_login",
+                source="alert.alert_type",
+            ),
+            EvidenceItem(
+                evidence_id="EVID-002",
+                kind="observable",
+                category="Network",
+                label="Source IP",
+                value="203.0.113.1",
+                source="alert.observables.source_ip",
+            ),
+            EvidenceItem(
+                evidence_id="EVID-002",
+                kind="observable",
+                category="Network",
+                label="Source IP duplicate",
+                value="203.0.113.1",
+                source="alert.observables.source_ip",
+            ),
+        ]
+        alert = AlertInput(
+            platform="custom",
+            alert_type="ssh_failed_login",
+            severity="high",
+            description="x",
+            observables=AlertObservables(source_ip="203.0.113.1"),
+        )
+        disposition = build_recommended_disposition(alert, evidence)
+        self.assertEqual(
+            disposition.evidence_ids,
+            list(dict.fromkeys(disposition.evidence_ids)),
+        )
+        self.assertEqual(disposition.evidence_ids.count("EVID-002"), 1)
+
+    def test_score_severity_mitre_raw_event_platform_independence(self) -> None:
+        output_a = investigate_alert(self.ssh_alert)
+        output_b = output_a.model_copy(
+            update={
+                "confidence": 12,
+                "severity_assessment": "Totally different severity text.",
+                "mitre": [
+                    MitreMapping(
+                        technique_id="T9999",
+                        technique_name="Fake Technique",
+                        tactic="Fake Tactic",
+                        confidence="low",
+                        rationale="Injected for independence test.",
+                    )
+                ],
+            }
+        )
+        report_a = build_investigation_report(self.ssh_alert, output_a)
+        report_b = build_investigation_report(self.ssh_alert, output_b)
+        assert report_a.disposition is not None
+        assert report_b.disposition is not None
+        self.assertEqual(
+            report_a.disposition.model_dump(),
+            report_b.disposition.model_dump(),
+        )
+
+        without_raw = self.ssh_alert.model_copy(update={"raw_event": None})
+        evidence_with = extract_evidence(self.ssh_alert)
+        evidence_without = extract_evidence(without_raw)
+        self.assertEqual(
+            build_recommended_disposition(self.ssh_alert, evidence_with).model_dump(),
+            build_recommended_disposition(without_raw, evidence_without).model_dump(),
+        )
+
+        other_platform = self.ssh_alert.model_copy(update={"platform": "other-siem"})
+        self.assertEqual(
+            build_recommended_disposition(
+                other_platform, extract_evidence(other_platform)
+            ).disposition,
+            self.ssh_disposition.disposition,
+        )
+        self.assertEqual(
+            build_recommended_disposition(
+                other_platform, extract_evidence(other_platform)
+            ).rationale,
+            self.ssh_disposition.rationale,
+        )
+
+        blob = _disposition_blob(self.ssh_disposition)
+        self.assertNotRegex(self.ssh_disposition.rationale.lower(), r"\b\d{1,3}\b")
+        self.assertNotIn("score", blob)
+        self.assertNotIn("severity", blob)
+        self.assertNotIn("t1110", blob)
+        for evid in self.ssh_disposition.evidence_ids:
+            self.assertTrue(evid.startswith("EVID-"))
+            self.assertFalse(evid.startswith("T"))
+            self.assertFalse(evid.startswith("OBS-"))
+            self.assertFalse(evid.startswith("SUP-"))
+            self.assertFalse(evid.startswith("LIM-"))
+
+    def test_wording_safety_prohibited_phrases(self) -> None:
+        for disposition in (
+            self.ssh_disposition,
+            self.phishing_disposition,
+            self.process_disposition,
+            build_recommended_disposition(
+                _alert_with_observables("unknown_type", source_ip="1.1.1.1"),
+                extract_evidence(
+                    _alert_with_observables("unknown_type", source_ip="1.1.1.1")
+                ),
+            ),
+            self._assert_insufficient("ssh_failed_login"),
+            self._assert_insufficient("phishing_email"),
+            self._assert_insufficient("suspicious_process"),
+        ):
+            blob = _disposition_blob(disposition)
+            for phrase in _PROHIBITED_DISPOSITION_PHRASES:
+                self.assertNotIn(phrase, blob)
+
+    def test_phase5_does_not_change_previous_sections_or_contracts(self) -> None:
+        output = investigate_alert(self.ssh_alert)
+        report = build_investigation_report(self.ssh_alert, output)
+        expected_evidence = extract_evidence(self.ssh_alert)
+        self.assertEqual(
+            [item.model_dump() for item in report.evidence],
+            [item.model_dump() for item in expected_evidence],
+        )
+        assert report.analyst_reasoning is not None
+        self.assertEqual(
+            report.analyst_reasoning.model_dump(),
+            build_analyst_reasoning(self.ssh_alert, expected_evidence).model_dump(),
+        )
+        assert report.confidence_rationale is not None
+        self.assertEqual(
+            report.confidence_rationale.model_dump(),
+            build_confidence_rationale(self.ssh_alert, expected_evidence).model_dump(),
+        )
+        self.assertEqual(report.confidence, output.confidence)
+        self.assertEqual(report.severity_assessment, output.severity_assessment)
+        self.assertEqual(
+            [m.model_dump() for m in report.mitre],
+            [m.model_dump() for m in output.mitre],
+        )
+        self.assertEqual(report.recommended_queries, output.recommended_queries)
+        self.assertEqual(report.next_steps, output.next_steps)
+        self.assertEqual(
+            report.detection_opportunities, output.detection_opportunities
+        )
+        self.assertEqual(report.limitations, output.limitations)
+        self.assertEqual(set(output.model_dump().keys()), _REQUIRED_OUTPUT_KEYS)
+        self.assertNotIn("disposition", output.model_dump())
+
+
+class DispositionMarkdownTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.alert = _load_sample_alert(_SAMPLE_SSH)
+        self.output = investigate_alert(self.alert)
+        self.report = build_investigation_report(self.alert, self.output)
+
+    def test_disposition_heading_order(self) -> None:
+        markdown = render_markdown(self.report)
+        self.assertIn("## Recommended Disposition", markdown)
+        confidence_idx = markdown.index("## Confidence Rationale")
+        disposition_idx = markdown.index("## Recommended Disposition")
+        summary_idx = markdown.index("## Executive Summary")
+        self.assertLess(confidence_idx, disposition_idx)
+        self.assertLess(disposition_idx, summary_idx)
+        self.assertNotIn("## Disposition\n", markdown)
+
+    def test_disposition_section_content(self) -> None:
+        markdown = render_markdown(self.report)
+        assert self.report.disposition is not None
+        section = markdown.split("## Recommended Disposition")[1].split(
+            "## Executive Summary"
+        )[0]
+        self.assertIn("**Disposition:** Suspicious Activity", section)
+        self.assertIn(self.report.disposition.rationale, section)
+        self.assertIn("**Analyst Review Required:** Yes", section)
+        self.assertIn("**Supporting Evidence:**", section)
+        for evid in self.report.disposition.evidence_ids:
+            self.assertIn(f"`{evid}`", section)
+        self.assertNotIn(str(self.report.confidence), section)
+        self.assertNotIn("contain the host", section.lower())
+        self.assertNotIn("disable the account", section.lower())
+
+    def test_supporting_evidence_omitted_when_empty(self) -> None:
+        disposition = RecommendedDisposition(
+            disposition=DispositionLabel.INSUFFICIENT_EVIDENCE,
+            rationale="Not enough scenario-specific evidence.",
+            evidence_ids=[],
+        )
+        report = self.report.model_copy(update={"disposition": disposition})
+        markdown = render_markdown(report)
+        section = markdown.split("## Recommended Disposition")[1].split(
+            "## Executive Summary"
+        )[0]
+        self.assertNotIn("Supporting Evidence", section)
+        self.assertIn("**Analyst Review Required:** Yes", section)
+
+    def test_section_omitted_when_disposition_none(self) -> None:
+        report = self.report.model_copy(update={"disposition": None})
+        self.assertNotIn("## Recommended Disposition", render_markdown(report))
+
+    def test_disposition_sanitizes_newlines(self) -> None:
+        disposition = RecommendedDisposition(
+            disposition=DispositionLabel.SUSPICIOUS_ACTIVITY,
+            rationale="Line one.\nLine two | pipe remains readable.",
+            evidence_ids=["EVID-001"],
+        )
+        report = self.report.model_copy(update={"disposition": disposition})
+        markdown = render_markdown(report)
+        self.assertIn(
+            "Line one. Line two | pipe remains readable.",
+            markdown,
+        )
+        self.assertNotIn("Line one.\nLine two", markdown)
 
 
 if __name__ == "__main__":

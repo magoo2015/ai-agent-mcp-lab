@@ -1,13 +1,15 @@
 """Structured investigation report models (Version 1.1 report layer).
 
 Preserves existing investigation content while providing typed fields for
-evidence, analyst reasoning, and confidence rationale, plus expansion
-points for timeline and disposition. Unpopulated sections default to
-empty collections or None — they are not filled with placeholder text.
+evidence, analyst reasoning, confidence rationale, and recommended
+disposition, plus an expansion point for timeline. Unpopulated sections
+default to empty collections or None — they are not filled with placeholder
+text.
 """
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -86,11 +88,20 @@ class TimelineEvent(BaseModel):
     source: Optional[str] = None
 
 
-class Disposition(BaseModel):
-    """Expansion point for Version 1.1 recommended disposition (not yet populated)."""
+class DispositionLabel(str, Enum):
+    """Controlled vocabulary for report-only recommended disposition."""
 
-    recommendation: str
-    rationale: Optional[str] = None
+    SUSPICIOUS_ACTIVITY = "Suspicious Activity"
+    INSUFFICIENT_EVIDENCE = "Insufficient Evidence"
+
+
+class RecommendedDisposition(BaseModel):
+    """Advisory recommended disposition grounded in normalized evidence."""
+
+    disposition: DispositionLabel
+    rationale: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    analyst_review_required: bool = True
 
 
 class InvestigationReport(BaseModel):
@@ -113,6 +124,7 @@ class InvestigationReport(BaseModel):
     analyst_reasoning: Optional[AnalystReasoning] = None
     # Confidence rationale from normalized evidence only (Phase 4).
     confidence_rationale: Optional[ConfidenceRationale] = None
-    # Remaining Version 1.1 expansion points — empty until future work.
+    # Recommended disposition from normalized evidence only (Phase 5).
+    disposition: Optional[RecommendedDisposition] = None
+    # Remaining Version 1.1 expansion point — empty until future work.
     timeline: list[TimelineEvent] = Field(default_factory=list)
-    disposition: Optional[Disposition] = None

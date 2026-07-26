@@ -2,6 +2,7 @@
 
 from reports.builder import build_investigation_report
 from reports.confidence import build_confidence_rationale
+from reports.disposition import build_recommended_disposition
 from reports.evidence import extract_evidence
 from reports.markdown_renderer import render_markdown
 from reports.models import (
@@ -9,10 +10,11 @@ from reports.models import (
     AnalystReasoning,
     ConfidenceRationale,
     ConfidenceStatement,
-    Disposition,
+    DispositionLabel,
     EvidenceItem,
     InvestigationReport,
     ReasoningStatement,
+    RecommendedDisposition,
     ReportMetadata,
     TimelineEvent,
 )
@@ -23,15 +25,17 @@ __all__ = [
     "AnalystReasoning",
     "ConfidenceRationale",
     "ConfidenceStatement",
-    "Disposition",
+    "DispositionLabel",
     "EvidenceItem",
     "InvestigationReport",
     "ReasoningStatement",
+    "RecommendedDisposition",
     "ReportMetadata",
     "TimelineEvent",
     "build_analyst_reasoning",
     "build_confidence_rationale",
     "build_investigation_report",
+    "build_recommended_disposition",
     "extract_evidence",
     "render_markdown",
 ]

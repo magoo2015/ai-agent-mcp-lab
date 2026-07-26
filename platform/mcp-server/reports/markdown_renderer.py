@@ -1,10 +1,11 @@
 """Render an InvestigationReport as deterministic Markdown.
 
 Consumes only the structured report. Does not import or call investigation
-engine functions, evidence extractors, reasoning builders, or confidence
-builders. Empty Version 1.1 expansion sections (aside from populated
-evidence, analyst reasoning, and confidence rationale) are omitted so the
-human-readable report stays intact.
+engine functions, evidence extractors, reasoning builders, confidence
+builders, or disposition builders. Empty Version 1.1 expansion sections
+(aside from populated evidence, analyst reasoning, confidence rationale,
+and recommended disposition) are omitted so the human-readable report stays
+intact.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from reports.models import (
     ConfidenceRationale,
     EvidenceItem,
     InvestigationReport,
+    RecommendedDisposition,
 )
 
 _QUERY_GROUP_TITLES = {
@@ -168,6 +170,26 @@ def _render_confidence_rationale(rationale: ConfidenceRationale) -> str:
     return "\n".join(sections).rstrip() + "\n"
 
 
+def _render_recommended_disposition(disposition: RecommendedDisposition) -> str:
+    """Render Recommended Disposition; omit Supporting Evidence when empty."""
+    review = "Yes" if disposition.analyst_review_required else "No"
+    lines = [
+        "## Recommended Disposition",
+        "",
+        f"**Disposition:** {_sanitize_inline(disposition.disposition.value)}",
+        "",
+        _sanitize_inline(disposition.rationale),
+        "",
+    ]
+    if disposition.evidence_ids:
+        joined = ", ".join(f"`{evid}`" for evid in disposition.evidence_ids)
+        lines.append(f"**Supporting Evidence:** {joined}")
+        lines.append("")
+    lines.append(f"**Analyst Review Required:** {review}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _render_mitre(report: InvestigationReport) -> str:
     mappings = report.mitre
     if not mappings:
@@ -247,6 +269,10 @@ def render_markdown(report: InvestigationReport) -> str:
         )
         parts.append("")
 
+    if report.disposition is not None:
+        parts.append(_render_recommended_disposition(report.disposition).rstrip())
+        parts.append("")
+
     parts.extend(
         [
             "## Executive Summary",
@@ -300,22 +326,6 @@ def render_markdown(report: InvestigationReport) -> str:
                         for event in report.timeline
                     ]
                 ),
-                "",
-            ]
-        )
-    if report.disposition is not None:
-        disposition_lines = [
-            f"- **Recommendation:** {report.disposition.recommendation}",
-        ]
-        if report.disposition.rationale:
-            disposition_lines.append(
-                f"- **Rationale:** {report.disposition.rationale}"
-            )
-        parts.extend(
-            [
-                "## Disposition",
-                "",
-                "\n".join(disposition_lines),
                 "",
             ]
         )
