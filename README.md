@@ -32,7 +32,8 @@ A SOC analyst prompt library and promptfoo evaluation suite sit alongside the ga
 
 - **MCP Investigation Engine** — Offline stdio MCP server (`investigate_alert`, `map_mitre`, `generate_queries`)
 - **MITRE Mapping** — Evidence-linked ATT&CK technique mapping from alert context
-- **Investigation Reports** — Structured packages and Markdown SOC report demos
+- **Investigation Reports** — Structured packages with Markdown SOC report demos and standalone offline HTML
+- **Browser PDF export** — Print the HTML report from a browser (Save as PDF); no separate PDF renderer in the service
 - **Query Generation** — QRadar AQL, Microsoft Defender KQL, Sentinel KQL, and OpenSearch DQL drafts
 - **Detection Recommendations** — Detection opportunities and next-step guidance per alert type
 
@@ -52,6 +53,23 @@ A SOC analyst prompt library and promptfoo evaluation suite sit alongside the ga
 
 - SOC prompt templates (alert summary, MITRE mapping, detection recommendation, executive summary)
 - promptfoo evaluation against the AI Gateway (`eval` Compose profile)
+
+## Report Outputs
+
+The investigation platform supports:
+
+- **Markdown** investigation reports
+- **Standalone offline HTML** reports
+- **Browser-generated PDF** reports
+
+PDF files are produced by printing the standalone HTML report through a browser. This avoids introducing a second report renderer or a heavyweight PDF dependency into the MCP service.
+
+Examples:
+
+- [docs/demo-output/ssh-failed-login-investigation.html](docs/demo-output/ssh-failed-login-investigation.html)
+- [docs/demo-output/ssh-failed-login-investigation.pdf](docs/demo-output/ssh-failed-login-investigation.pdf)
+
+Workflow detail: [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) (Version 1.1 Phase 7 — Browser Print-to-PDF Export).
 
 ## Architecture
 
@@ -95,7 +113,7 @@ Python · FastAPI · Docker · Docker Compose · MCP · Promptfoo · Grafana · 
 ```text
 ai-agent-mcp-lab/
 ├── docs/
-│   ├── demo-output/              # Sample SOC Markdown reports from MCP demos
+│   ├── demo-output/              # Sample Markdown, HTML, and PDF SOC reports
 │   └── images/                   # Architecture diagrams and README assets
 │       └── architecture-overview.svg
 ├── notes/
@@ -159,6 +177,12 @@ Detection opportunities + next steps
         ↓
 Markdown SOC investigation report
   (docs/demo-output/*.md)
+        ↓
+Standalone HTML report (optional)
+  (docs/demo-output/*.html)
+        ↓
+Browser Print → Save as PDF (optional)
+  (docs/demo-output/*.pdf)
 ```
 
 Example reports: [docs/demo-output/](docs/demo-output/).

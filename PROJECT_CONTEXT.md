@@ -235,7 +235,7 @@ ai-agent-mcp-lab/
 | Path | Role |
 | ---- | ---- |
 | `docs/images/` | Architecture diagram (SVG/PNG/drawio) |
-| `docs/demo-output/` | Markdown and HTML SOC reports from MCP demos |
+| `docs/demo-output/` | Markdown, HTML, and browser-printed PDF SOC report samples from MCP demos |
 | `docs/project_context.md` | Empty placeholder (superseded by root `PROJECT_CONTEXT.md`) |
 
 ## `scripts/` — workstation MCP lab
@@ -295,7 +295,8 @@ Documented below are **Implemented** features only.
 | **Deterministic evidence extraction** | `extract_evidence(alert)` populates `InvestigationReport.evidence` from normalized alert fields only (`EVID-###`); Markdown/HTML evidence tables; no `raw_event` parsing |
 | **Structured analyst reasoning** | `build_analyst_reasoning(alert, evidence)` → evidence-linked `AnalystReasoning` (`OBS/ASM/ALT/GAP-###`); report-layer only |
 | **Structured confidence rationale** | `build_confidence_rationale(alert, evidence)` → `ConfidenceRationale` (`SUP/LIM-###`); context for (not a reproduction of) the numeric score; report-layer only |
-| **Standalone HTML reports** | `render_html(report)` → offline, no-JS, embedded-CSS HTML; executive-first layout; print-friendly; planned PDF source (Phase 7) |
+| **Standalone HTML reports** | `render_html(report)` → offline, no-JS, embedded-CSS HTML; executive-first layout; print-friendly; authoritative presentation source for PDF |
+| **Browser print-to-PDF** | PDF is an export of the standalone HTML via the browser print dialog (`@media print` CSS); no independent PDF renderer or PDF dependency |
 | **Sample alerts** | SSH failed login (Wazuh-shaped), Defender suspicious process, Proofpoint phishing |
 
 ## Workstation MCP (`scripts/soc_mcp_server.py`)
@@ -367,7 +368,10 @@ InvestigationOutput
 InvestigationReport
     ├── Markdown Renderer
     └── HTML Renderer
+            └── Browser Print-to-PDF
 ```
+
+PDF is an export of the HTML report, not a peer renderer.
 
 Inside `investigate_alert`, MITRE mapping, query generation, severity, confidence,
 next steps, detection opportunities, and limitations are unchanged. The report
@@ -431,9 +435,88 @@ embedded CSS only, no JavaScript, no external fonts/CDNs/images, standard-librar
 `html.escape` only (no template engine). Executive-first section order with an
 Investigation Status summary card, semantic evidence table, print-friendly CSS,
 and analyst-review language kept prominent. File writing stays outside the
-renderer (`demo_investigation.py --html-output`). HTML is the planned source for
-Phase 7 PDF export. Investigation logic, CLI compact keys, and MCP output keys
-are unchanged.
+renderer (`demo_investigation.py --html-output`). HTML remains the authoritative
+presentation source for browser print-to-PDF (Phase 7). Investigation logic, CLI
+compact keys, and MCP output keys are unchanged.
+
+### Phase 7 — Browser Print-to-PDF Export
+
+**Browser print-to-PDF export (Implemented — Version 1.1 Phase 7):**
+PDF derives from the standalone HTML report. There is no independent PDF
+renderer (`pdf_renderer.py` / `pdf_exporter.py` are intentionally absent), no
+PDF conversion dependency (no Chromium, Playwright, WeasyPrint, wkhtmltopdf,
+ReportLab, or similar in the MCP service), and no Docker image or
+`requirements.txt` change. The browser’s print engine applies the existing
+`@media print` / `@page` CSS. PDF creation is an explicit user action; normal
+investigation execution does not create PDF files. CLI compact and MCP contracts
+remain unchanged. Automated batch PDF export remains deferred; WeasyPrint (or
+similar) may be reconsidered later if repeatable batch generation becomes
+necessary. Sample: `docs/demo-output/ssh-failed-login-investigation.pdf`
+(generated from `docs/demo-output/ssh-failed-login-investigation.html`).
+
+#### Browser print-to-PDF workflow
+
+Generate source HTML (the `mcp-server` service has no default host volume for
+`docs/`; mount the demo-output directory so the file lands on the host):
+
+```bash
+cd ~/projects/ai-agent-mcp-lab/platform
+
+docker compose --profile mcp run --rm \
+  -v "$(pwd)/../docs/demo-output:/output" \
+  mcp-server \
+  python demo_investigation.py \
+    --html-output /output/ssh-failed-login-investigation.html
+```
+
+Copy the HTML to a local Mac (placeholders — do not hard-code host IP or key path):
+
+```bash
+scp -i ~/.ssh/<SSH-KEY> \
+  sysadmin@<VPS-IP>:/home/sysadmin/projects/ai-agent-mcp-lab/docs/demo-output/ssh-failed-login-investigation.html \
+  ~/Downloads/
+```
+
+Open locally:
+
+```bash
+open ~/Downloads/ssh-failed-login-investigation.html
+```
+
+In the browser: **File → Print** (labels vary slightly across Chrome, Edge,
+Firefox, and Safari). Suggested settings:
+
+```text
+Destination: Save as PDF
+Paper size: Letter
+Headers and footers: Off
+Background graphics: On if needed for report surfaces
+Scale: Default or 100%
+Margins: Default (report @page print CSS supplies margins)
+Orientation: Portrait
+```
+
+#### PDF determinism
+
+The source HTML is deterministic. PDF visual content is expected to remain
+consistent when generated from the same HTML using the same browser and print
+settings. PDF binary metadata, object identifiers, and timestamps may differ
+between browser versions or export runs. Same report does **not** promise
+identical PDF bytes. No PDF normalization or metadata-stripping step is added.
+
+#### PDF / HTML security boundary
+
+- Report-derived content is escaped by the HTML renderer (`html.escape`)
+- The HTML has no JavaScript
+- The HTML uses no external CSS, fonts, images, or network resources
+- The PDF is generated from a local offline HTML file
+- No remote content is fetched during normal report viewing
+- No PDF engine is executed inside the MCP service
+- No user-controlled shell command is introduced for PDF creation
+- No PDF is returned through MCP
+
+Do not overstate browser security guarantees beyond this offline, local-export
+model.
 
 `InvestigationReport` still reserves an empty expansion point for timeline —
 not yet populated.
@@ -794,13 +877,13 @@ Near-term investigation-report and demo improvements (treat as **Planned** unles
 | Confidence assessment | **Implemented (Phase 4)** — structured `ConfidenceRationale` (`SUP-###` / `LIM-###`) from normalized evidence; context for (not a reproduction of) `_compute_confidence()`; Markdown after Analyst Reasoning; score remains engine-owned; MCP/CLI contracts unchanged |
 | Investigation timelines | Planned expansion point on `InvestigationReport` (empty; not populated) |
 | Final disposition | **Implemented (Phase 5)** — structured report-only `RecommendedDisposition` (`Suspicious Activity` / `Insufficient Evidence`); evidence-grounded `EVID-###` refs; deterministic scenario handlers + conservative unknown fallback; analyst review always required; no benign/likely-malicious/TP/FP labels; no automated closure or containment; no confidence/severity thresholds; no `raw_event` parsing; MCP/CLI contracts unchanged |
-| Standalone HTML reports | **Implemented (Phase 6)** — `render_html(InvestigationReport) -> str`; offline standalone HTML; embedded CSS only; no JavaScript/CDNs/template engines; executive-first layout + Investigation Status card; print-friendly; deterministic; stdlib escaping; same report object as Markdown; planned PDF source for Phase 7; MCP/CLI contracts unchanged |
-| PDF export | Planned (Phase 7) — derive from Phase 6 HTML; not implemented |
+| Standalone HTML reports | **Implemented (Phase 6)** — `render_html(InvestigationReport) -> str`; offline standalone HTML; embedded CSS only; no JavaScript/CDNs/template engines; executive-first layout + Investigation Status card; print-friendly; deterministic; stdlib escaping; same report object as Markdown; authoritative source for Phase 7 browser print-to-PDF; MCP/CLI contracts unchanged |
+| Browser print-to-PDF export | **Implemented (Phase 7)** — PDF derives from standalone HTML via browser Print → Save as PDF; HTML remains authoritative; no independent PDF renderer; no PDF conversion dependency; no Docker/runtime memory or build-size increase; `@media print` CSS applied by the browser; explicit user action only; CLI/MCP unchanged; automated batch PDF deferred (WeasyPrint optional later if needed) |
 | Severity assessment | Deeper, evidence-tied severity narrative |
 | Interactive demo runner | Improve `demo_investigation.py` UX / multi-sample flows |
 | Platform-specific investigations | Stronger Wazuh / Defender / Proofpoint (and related) specialization |
 
-*Already Implemented today (baseline for 1.1 Phases 1–6):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown and standalone HTML renderers), deterministic evidence extraction from normalized alert fields, evidence-based structured analyst reasoning, structured confidence rationale (supporting/limiting factors; normalized evidence only; does not recalculate or fully reproduce the numeric score), structured recommended disposition (two-label controlled vocabulary; advisory only; analyst review always required), Markdown and offline HTML demo reports (evidence + analyst reasoning + confidence rationale + recommended disposition; HTML executive-first with Investigation Status), severity assessment text, numeric confidence (engine-owned via `_compute_confidence()`), MITRE confidence, three sample platforms. Timeline remains unpopulated. PDF export is not implemented. Threat-intelligence enrichment and `raw_event` parsing are not implemented. MCP and CLI investigation output keys remain unchanged.
+*Already Implemented today (baseline for 1.1 Phases 1–7):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown and standalone HTML renderers), deterministic evidence extraction from normalized alert fields, evidence-based structured analyst reasoning, structured confidence rationale (supporting/limiting factors; normalized evidence only; does not recalculate or fully reproduce the numeric score), structured recommended disposition (two-label controlled vocabulary; advisory only; analyst review always required), Markdown and offline HTML demo reports (evidence + analyst reasoning + confidence rationale + recommended disposition; HTML executive-first with Investigation Status), browser print-to-PDF from the HTML report (no PDF dependency in the MCP service; sample under `docs/demo-output/`), severity assessment text, numeric confidence (engine-owned via `_compute_confidence()`), MITRE confidence, three sample platforms. Timeline remains unpopulated. Automated batch PDF export is not implemented. Threat-intelligence enrichment and `raw_event` parsing are not implemented. MCP and CLI investigation output keys remain unchanged.
 
 ## Version 1.2 — Planned / later
 
