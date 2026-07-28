@@ -297,7 +297,8 @@ Documented below are **Implemented** features only.
 | **Structured confidence rationale** | `build_confidence_rationale(alert, evidence)` → `ConfidenceRationale` (`SUP/LIM-###`); context for (not a reproduction of) the numeric score; report-layer only |
 | **Standalone HTML reports** | `render_html(report)` → offline, no-JS, embedded-CSS HTML; executive-first layout; print-friendly; authoritative presentation source for PDF |
 | **Browser print-to-PDF** | PDF is an export of the standalone HTML via the browser print dialog (`@media print` CSS); no independent PDF renderer or PDF dependency |
-| **Sample alerts** | SSH failed login (Wazuh-shaped), Defender suspicious process, Proofpoint phishing |
+| **Sample alerts** | SSH failed login (Wazuh-shaped), Defender suspicious process, Proofpoint phishing, unclassified insufficient-evidence fixture |
+| **Demo gallery** | Four scenarios under `docs/demo-output/` (Markdown + HTML; one SSH PDF); index at `docs/demo-output/README.md` |
 
 ## Workstation MCP (`scripts/soc_mcp_server.py`)
 
@@ -517,6 +518,31 @@ identical PDF bytes. No PDF normalization or metadata-stripping step is added.
 
 Do not overstate browser security guarantees beyond this offline, local-export
 model.
+
+### Phase 8 — Demo Gallery and Portfolio Polish
+
+**Demo gallery and portfolio polish (Implemented — Version 1.1 Phase 8):**
+Version 1.1 implementation is complete. Phase 8 is presentation, validation, and
+release readiness—not new investigation capability.
+
+| Scenario | Input | Expected disposition | Artifacts |
+| -------- | ----- | -------------------- | --------- |
+| SSH Failed Login | `sample_data/ssh_failed_login.json` | Suspicious Activity | `.md` · `.html` · `.pdf` |
+| Phishing Email | `sample_data/proofpoint_phishing.json` | Suspicious Activity | `.md` · `.html` |
+| Suspicious Process | `sample_data/defender_suspicious_process.json` | Suspicious Activity | `.md` · `.html` |
+| Insufficient Evidence | `sample_data/insufficient_evidence.json` | Insufficient Evidence | `.md` · `.html` |
+
+Gallery artifacts live under `docs/demo-output/` with kebab-case names
+(`ssh-failed-login-investigation.*`, `phishing-email-investigation.*`,
+`suspicious-process-investigation.*`, `insufficient-evidence-investigation.*`).
+Index: `docs/demo-output/README.md`. Regeneration uses existing
+`demo_investigation.py` with a host volume mount to `/output` (no
+`generate_demo_gallery.py`, no automated PDF generation). Only the SSH PDF is
+committed (browser print-to-PDF). Root README was restructured for portfolio
+clarity. Sample data remains fictional. Core report logic is unchanged unless a
+verified defect is corrected. Report/HTML tests: **179** (`138` + `41`). CLI and
+MCP contracts unchanged. Recommended release tag: `v1.1.0` (**not created yet**).
+Future work (timeline model, live connectors, batch PDF, CI) is post–Version 1.1.
 
 `InvestigationReport` still reserves an empty expansion point for timeline —
 not yet populated.
@@ -865,9 +891,11 @@ The platform treats SOC automation as **evidence-grounded assistance**, not auto
 
 # 12. Current Roadmap
 
-## Version 1.1 — In progress
+## Version 1.1 — Complete (implementation)
 
-Near-term investigation-report and demo improvements (treat as **Planned** unless marked Implemented):
+Investigation-report and demo gallery work for Version 1.1 is **implemented**.
+Recommended Git tag: `v1.1.0` (not created yet). Items below marked Planned are
+post–1.1 expansion, not release blockers.
 
 | Item | Notes |
 | ---- | ----- |
@@ -875,15 +903,16 @@ Near-term investigation-report and demo improvements (treat as **Planned** unles
 | Evidence tables | **Implemented (Phase 2)** — `extract_evidence(alert)` → `EvidenceItem[]` with stable `EVID-###` IDs; Markdown table after Alert Overview; normalized fields only; no `raw_event` parsing; MITRE stays classification |
 | Analyst reasoning | **Implemented (Phase 3)** — structured `AnalystReasoning` with evidence-linked statements; deterministic scenario templates (SSH / phishing / suspicious process) + conservative unknown fallback; Markdown after Evidence; no LLM; MCP/CLI contracts unchanged |
 | Confidence assessment | **Implemented (Phase 4)** — structured `ConfidenceRationale` (`SUP-###` / `LIM-###`) from normalized evidence; context for (not a reproduction of) `_compute_confidence()`; Markdown after Analyst Reasoning; score remains engine-owned; MCP/CLI contracts unchanged |
-| Investigation timelines | Planned expansion point on `InvestigationReport` (empty; not populated) |
+| Investigation timelines | **Future (post–1.1)** — expansion point on `InvestigationReport` (empty; not populated) |
 | Final disposition | **Implemented (Phase 5)** — structured report-only `RecommendedDisposition` (`Suspicious Activity` / `Insufficient Evidence`); evidence-grounded `EVID-###` refs; deterministic scenario handlers + conservative unknown fallback; analyst review always required; no benign/likely-malicious/TP/FP labels; no automated closure or containment; no confidence/severity thresholds; no `raw_event` parsing; MCP/CLI contracts unchanged |
 | Standalone HTML reports | **Implemented (Phase 6)** — `render_html(InvestigationReport) -> str`; offline standalone HTML; embedded CSS only; no JavaScript/CDNs/template engines; executive-first layout + Investigation Status card; print-friendly; deterministic; stdlib escaping; same report object as Markdown; authoritative source for Phase 7 browser print-to-PDF; MCP/CLI contracts unchanged |
 | Browser print-to-PDF export | **Implemented (Phase 7)** — PDF derives from standalone HTML via browser Print → Save as PDF; HTML remains authoritative; no independent PDF renderer; no PDF conversion dependency; no Docker/runtime memory or build-size increase; `@media print` CSS applied by the browser; explicit user action only; CLI/MCP unchanged; automated batch PDF deferred (WeasyPrint optional later if needed) |
-| Severity assessment | Deeper, evidence-tied severity narrative |
-| Interactive demo runner | Improve `demo_investigation.py` UX / multi-sample flows |
-| Platform-specific investigations | Stronger Wazuh / Defender / Proofpoint (and related) specialization |
+| Demo gallery and portfolio polish | **Implemented (Phase 8)** — four-scenario gallery (SSH / phishing / suspicious process / insufficient evidence); kebab-case Markdown+HTML artifacts; one SSH PDF; gallery index; portfolio README; sample-data quality fix (`analyst@example.com`); no gallery-generation script; no automated PDF; 179 report/HTML tests; CLI/MCP contracts unchanged; tag `v1.1.0` recommended but not created |
+| Severity assessment | **Future (post–1.1)** — deeper, evidence-tied severity narrative |
+| Interactive demo runner | **Future (post–1.1)** — improve `demo_investigation.py` UX / multi-sample flows |
+| Platform-specific investigations | **Future (post–1.1)** — stronger Wazuh / Defender / Proofpoint (and related) specialization |
 
-*Already Implemented today (baseline for 1.1 Phases 1–7):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown and standalone HTML renderers), deterministic evidence extraction from normalized alert fields, evidence-based structured analyst reasoning, structured confidence rationale (supporting/limiting factors; normalized evidence only; does not recalculate or fully reproduce the numeric score), structured recommended disposition (two-label controlled vocabulary; advisory only; analyst review always required), Markdown and offline HTML demo reports (evidence + analyst reasoning + confidence rationale + recommended disposition; HTML executive-first with Investigation Status), browser print-to-PDF from the HTML report (no PDF dependency in the MCP service; sample under `docs/demo-output/`), severity assessment text, numeric confidence (engine-owned via `_compute_confidence()`), MITRE confidence, three sample platforms. Timeline remains unpopulated. Automated batch PDF export is not implemented. Threat-intelligence enrichment and `raw_event` parsing are not implemented. MCP and CLI investigation output keys remain unchanged.
+*Already Implemented (Version 1.1 Phases 1–8 complete):* JSON investigation packages, reusable structured report layer (`InvestigationReport` + builder + Markdown and standalone HTML renderers), deterministic evidence extraction from normalized alert fields, evidence-based structured analyst reasoning, structured confidence rationale (supporting/limiting factors; normalized evidence only; does not recalculate or fully reproduce the numeric score), structured recommended disposition (two-label controlled vocabulary; advisory only; analyst review always required), four-scenario demo gallery under `docs/demo-output/` (Markdown + HTML; SSH PDF via browser print), portfolio-oriented root README, severity assessment text, numeric confidence (engine-owned via `_compute_confidence()`), MITRE confidence, four sample inputs including insufficient-evidence. Timeline remains unpopulated. Automated batch PDF export is not implemented. Threat-intelligence enrichment and `raw_event` parsing are not implemented. MCP and CLI investigation output keys remain unchanged. Release tag `v1.1.0` is recommended and not yet created.
 
 ## Version 1.2 — Planned / later
 
@@ -959,7 +988,7 @@ Before writing or changing any code:
 3. Follow the Development Principles in PROJECT_CONTEXT.md.
 4. Avoid unnecessary complexity. Prefer modular, incremental changes.
 5. Clearly distinguish Implemented vs Planned vs Future Ideas. Do not invent features.
-6. Continue from the documented roadmap (Version 1.1 first) unless I specify otherwise.
+6. Continue from the documented roadmap (post–Version 1.1 future work) unless I specify otherwise.
 7. Explain design decisions (WHY) before implementation (HOW).
 8. Separate investigation logic from presentation layers.
 9. Protect secrets; ask before adding dependencies; no destructive git/filesystem ops

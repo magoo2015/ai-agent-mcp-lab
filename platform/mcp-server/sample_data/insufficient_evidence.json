@@ -1,0 +1,15 @@
+{
+  "platform": "lab",
+  "alert_type": "unclassified_alert",
+  "severity": "low",
+  "description": "Generic security alert with limited normalized context and no scenario-specific investigation template.",
+  "observables": {
+    "source_ip": "198.51.100.77",
+    "hostname": "host-01"
+  },
+  "raw_event": {
+    "timestamp": "2026-07-07T16:00:00Z",
+    "event_id": "lab-unclassified-001",
+    "note": "Synthetic fixture for insufficient-evidence demonstration"
+  }
+}

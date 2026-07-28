@@ -6,6 +6,102 @@
 - **Vendor severity:** high
 - **Confidence:** 82
 
+## Evidence
+
+| ID | Kind | Category | Evidence | Value | Source | Context |
+|---|---|---|---|---|---|---|
+| EVID-001 | metadata | Alert Metadata | Platform | wazuh | alert.platform | Platform that generated the normalized alert. |
+| EVID-002 | metadata | Alert Metadata | Alert type | ssh_failed_login | alert.alert_type | Normalized alert type. |
+| EVID-003 | metadata | Alert Metadata | Vendor severity | high | alert.severity | Severity reported by the alert source. |
+| EVID-004 | metadata | Alert Metadata | Description | Multiple SSH authentication failures detected against privileged account root from external source. | alert.description | Description supplied with the normalized alert. |
+| EVID-005 | observable | Identity | Username | root | alert.observables.username | Account associated with the alert. |
+| EVID-006 | observable | Host | Hostname | prod-web-01 | alert.observables.hostname | Host associated with the alert. |
+| EVID-007 | observable | Network | Source IP | 203.0.113.45 | alert.observables.source_ip | Source IP associated with the alert. |
+| EVID-008 | observable | Network | Destination IP | 10.0.1.15 | alert.observables.destination_ip | Destination IP associated with the alert. |
+
+## Analyst Reasoning
+
+### Observations
+
+- **OBS-001:** The normalized alert reports SSH authentication failures.
+  Evidence: `EVID-002`, `EVID-004`
+
+- **OBS-002:** The alert contains a source IP.
+  Evidence: `EVID-007`
+
+- **OBS-003:** The alert contains a destination IP.
+  Evidence: `EVID-008`
+
+- **OBS-004:** The alert contains a username.
+  Evidence: `EVID-005`
+
+- **OBS-005:** The alert contains a hostname.
+  Evidence: `EVID-006`
+
+### Assessment
+
+- **ASM-001:** The reported behavior is consistent with repeated SSH authentication failures.
+  Evidence: `EVID-002`, `EVID-004`
+
+- **ASM-002:** The normalized evidence does not establish that authentication succeeded.
+
+### Alternative Explanations
+
+- **ALT-001:** Automated internet scanning or password guessing.
+
+- **ALT-002:** Authorized security testing or administrative validation.
+
+- **ALT-003:** A vendor detection triggered on repeated but unsuccessful authentication activity.
+
+### Evidence Gaps
+
+- **GAP-001:** No successful-authentication telemetry is included in the normalized alert.
+
+- **GAP-002:** No post-authentication process telemetry is included.
+
+- **GAP-003:** No lateral-movement telemetry is included.
+
+## Confidence Rationale
+
+### Supporting Factors
+
+- **SUP-001:** Authentication-failure activity is reported in the normalized alert.
+  Evidence: `EVID-002`, `EVID-004`
+
+- **SUP-002:** A source IP is identified in the normalized evidence.
+  Evidence: `EVID-007`
+
+- **SUP-003:** A target username is identified.
+  Evidence: `EVID-005`
+
+- **SUP-004:** A destination host is identified.
+  Evidence: `EVID-006`
+
+- **SUP-005:** A destination IP is identified.
+  Evidence: `EVID-008`
+
+### Limiting Factors
+
+- **LIM-001:** Successful authentication cannot be confirmed from normalized evidence alone.
+
+- **LIM-002:** Post-authentication endpoint activity is not available in the normalized alert.
+
+- **LIM-003:** Containment or response status is not available.
+
+### Overall
+
+The available normalized identifiers provide grounding for the authentication investigation, while successful-login and post-authentication telemetry remain unavailable. These factors provide context for the reported confidence score but do not reproduce its calculation.
+
+## Recommended Disposition
+
+**Disposition:** Suspicious Activity
+
+The normalized alert contains authentication-failure activity and identifying network, account, or host context. Successful access or downstream compromise cannot be confirmed from the available evidence.
+
+**Supporting Evidence:** `EVID-002`, `EVID-004`, `EVID-007`, `EVID-005`, `EVID-006`, `EVID-008`
+
+**Analyst Review Required:** Yes
+
 ## Executive Summary
 
 wazuh reported a ssh_failed_login alert (high severity). Multiple SSH authentication failures detected against privileged account root from external source. Key observables: source IP 203.0.113.45, destination IP 10.0.1.15, host prod-web-01, user root.

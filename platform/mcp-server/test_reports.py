@@ -238,7 +238,7 @@ class EvidenceExtractionTests(unittest.TestCase):
         self.assertEqual(
             by_label["Sender"].value, "it-support@corp-secure-login.example"
         )
-        self.assertEqual(by_label["Recipient"].value, "analyst@company.com")
+        self.assertEqual(by_label["Recipient"].value, "analyst@example.com")
         self.assertEqual(by_label["URL"].category, "Indicator")
         self.assertEqual(by_label["Sender"].category, "Email")
 

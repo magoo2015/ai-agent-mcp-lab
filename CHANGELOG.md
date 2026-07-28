@@ -9,6 +9,34 @@ All notable changes to the AI Agent MCP Lab and AI Security Engineering Platform
 - Operational helper scripts under `platform/scripts/` (`deploy.sh`, `status.sh`, `stop.sh`)
 - `platform/.env.example` for documented future environment variables
 
+## Version 1.1
+
+Investigation reporting and demo gallery (Phases 1–8). Implementation complete; release tag `v1.1.0` recommended but not yet created.
+
+### Added
+
+- Structured investigation reports (`InvestigationReport` + builder)
+- Deterministic evidence tables with traceable IDs
+- Analyst reasoning linked to evidence
+- Confidence rationale (supporting / limiting factors)
+- Recommended disposition (`Suspicious Activity` / `Insufficient Evidence`)
+- Standalone offline HTML reports
+- Browser print-to-PDF workflow (SSH PDF sample)
+- Four-scenario demo gallery under `docs/demo-output/`
+- Insufficient-evidence sample alert
+
+### Changed
+
+- Portfolio-focused root README and gallery documentation
+- Expanded report and HTML validation (179 tests)
+- Phishing sample recipient domain (`analyst@example.com`)
+
+### Unchanged
+
+- MCP and compact CLI investigation output contracts
+- No automated PDF generation dependency
+- No live SIEM / EDR connectors
+
 ## Platform milestones
 
 ### Nginx reverse proxy

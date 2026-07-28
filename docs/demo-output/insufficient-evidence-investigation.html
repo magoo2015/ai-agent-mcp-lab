@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Security Investigation Report — Generic security alert with limited normalized context and no scenario-specific investigation template.</title>
+<style>
+:root {
+  --text: #1a2332;
+  --muted: #5a6577;
+  --border: #d0d7e2;
+  --surface: #ffffff;
+  --surface-subtle: #f4f6f9;
+  --accent: #3d5a73;
+  --background: #e8ecf1;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { font-size: 16px; }
+body {
+  margin: 0;
+  padding: 1.25rem;
+  background: var(--background);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  line-height: 1.55;
+}
+.report {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 1.75rem 1.5rem 2rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(26, 35, 50, 0.08);
+}
+.report-header {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.report-header h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.report-header .alert-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.report-header .platform-line {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+.report-header .subtitle {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.section {
+  margin: 1.35rem 0;
+}
+.section h2 {
+  margin: 0 0 0.65rem;
+  font-size: 1.15rem;
+  font-weight: 650;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3rem;
+}
+.section h3 {
+  margin: 0.85rem 0 0.45rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.muted {
+  color: var(--muted);
+  font-style: italic;
+}
+.mono,
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+.prose {
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-line;
+}
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0.85rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.status-item {
+  margin: 0;
+}
+.status-item dt {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.status-item dd {
+  margin: 0.15rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.summary-grid {
+  display: grid;
+  grid-template-columns: minmax(7rem, 11rem) 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+.summary-grid dt {
+  margin: 0;
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.summary-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.disposition-card {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+}
+.disposition-badge {
+  display: inline-block;
+  margin: 0 0 0.65rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.disposition-card .review-line {
+  margin: 0.75rem 0 0;
+  font-weight: 650;
+}
+.table-wrap {
+  overflow-x: auto;
+  margin: 0;
+}
+.evidence-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.evidence-table th,
+.evidence-table td {
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.evidence-table thead th {
+  background: var(--surface-subtle);
+  font-weight: 650;
+}
+.evidence-table th[scope="row"] {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.statement-group {
+  margin: 0.75rem 0;
+  padding: 0.65rem 0.75rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.statement-group.assessment {
+  border-left: 3px solid var(--accent);
+}
+.statement-group.alternatives {
+  border-left: 3px solid #8a94a6;
+}
+.statement-group.gaps {
+  border-left: 3px solid #9aa3b2;
+}
+.statement-group.supporting {
+  border-left: 3px solid var(--accent);
+}
+.statement-group.limiting {
+  border-left: 3px solid #8a94a6;
+}
+.statement {
+  margin: 0.55rem 0;
+  padding: 0.35rem 0;
+}
+.statement + .statement {
+  border-top: 1px solid var(--border);
+}
+.statement-id {
+  display: block;
+  margin: 0 0 0.2rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+.reference-list {
+  margin: 0.3rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.content-card {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.mitre-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.mitre-table th,
+.mitre-table td {
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.mitre-table thead th {
+  background: var(--surface-subtle);
+  font-weight: 650;
+}
+.query-block {
+  margin: 0.5rem 0 0.85rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+.query-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.item-list {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+}
+.item-list li {
+  margin: 0.3rem 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.limitations-section {
+  padding: 0.85rem 1rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.report-footer {
+  margin-top: 1.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+.report-footer p {
+  margin: 0.25rem 0;
+}
+@media (max-width: 40rem) {
+  body { padding: 0.65rem; }
+  .report { padding: 1.1rem 0.85rem 1.35rem; }
+  .summary-grid {
+    grid-template-columns: 1fr;
+    gap: 0.15rem 0;
+  }
+  .summary-grid dt { margin-top: 0.45rem; }
+  .status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media print {
+  @page { margin: 0.65in; }
+  body {
+    background: #fff;
+    padding: 0;
+  }
+  .report {
+    max-width: none;
+    box-shadow: none;
+    border: 0;
+    padding: 0;
+  }
+  section,
+  .statement,
+  .disposition-card,
+  .query-block,
+  .statement-group,
+  .content-card,
+  .limitations-section {
+    break-inside: avoid;
+  }
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+  thead {
+    display: table-header-group;
+  }
+  pre,
+  code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+</style>
+</head>
+<body>
+<main class="report">
+<header class="report-header">
+<h1>AI Security Investigation Report</h1>
+<p class="alert-title">Generic security alert with limited normalized context and no scenario-specific investigation template.</p>
+<p class="platform-line">Platform: lab</p>
+<p class="subtitle">Evidence-grounded security investigation summary</p>
+</header>
+<section class="section" aria-labelledby="status-heading">
+<h2 id="status-heading">Investigation Status</h2>
+<dl class="status-grid">
+<div class="status-item"><dt>Disposition</dt><dd>Insufficient Evidence</dd></div>
+<div class="status-item"><dt>Severity</dt><dd>low</dd></div>
+<div class="status-item"><dt>Confidence</dt><dd>39</dd></div>
+<div class="status-item"><dt>Analyst Review</dt><dd>Required</dd></div>
+<div class="status-item"><dt>MITRE</dt><dd>UNKNOWN</dd></div>
+</dl>
+</section>
+<section class="section" aria-labelledby="overview-heading">
+<h2 id="overview-heading">Alert Overview</h2>
+<dl class="summary-grid">
+<dt>Platform</dt>
+<dd>lab</dd>
+<dt>Alert Type</dt>
+<dd>unclassified_alert</dd>
+<dt>Vendor Severity</dt>
+<dd>low</dd>
+<dt>Confidence</dt>
+<dd>39</dd>
+<dt>Source IP</dt>
+<dd>198.51.100.77</dd>
+<dt>Hostname</dt>
+<dd>host-01</dd>
+</dl>
+</section>
+<section class="section" aria-labelledby="summary-heading">
+<h2 id="summary-heading">Executive Summary</h2>
+<p class="prose">lab reported a unclassified_alert alert (low severity). Generic security alert with limited normalized context and no scenario-specific investigation template. Key observables: source IP 198.51.100.77, host host-01.</p>
+</section>
+<section class="section" aria-labelledby="disposition-heading">
+<h2 id="disposition-heading">Recommended Disposition</h2>
+<div class="disposition-card">
+<div class="disposition-badge">Insufficient Evidence</div>
+<p class="prose">The normalized alert does not provide enough scenario-specific evidence to support a stronger disposition.</p>
+<p class="review-line">Analyst Review Required: Yes</p>
+</div>
+</section>
+<section class="section" aria-labelledby="evidence-heading">
+<h2 id="evidence-heading">Evidence</h2>
+<div class="table-wrap">
+<table class="evidence-table">
+<thead><tr><th scope="col">ID</th><th scope="col">Kind</th><th scope="col">Category</th><th scope="col">Evidence</th><th scope="col">Value</th><th scope="col">Source</th><th scope="col">Context</th></tr></thead>
+<tbody>
+<tr><th scope="row">EVID-001</th><td>metadata</td><td>Alert Metadata</td><td>Platform</td><td>lab</td><td>alert.platform</td><td>Platform that generated the normalized alert.</td></tr>
+<tr><th scope="row">EVID-002</th><td>metadata</td><td>Alert Metadata</td><td>Alert type</td><td>unclassified_alert</td><td>alert.alert_type</td><td>Normalized alert type.</td></tr>
+<tr><th scope="row">EVID-003</th><td>metadata</td><td>Alert Metadata</td><td>Vendor severity</td><td>low</td><td>alert.severity</td><td>Severity reported by the alert source.</td></tr>
+<tr><th scope="row">EVID-004</th><td>metadata</td><td>Alert Metadata</td><td>Description</td><td>Generic security alert with limited normalized context and no scenario-specific investigation template.</td><td>alert.description</td><td>Description supplied with the normalized alert.</td></tr>
+<tr><th scope="row">EVID-005</th><td>observable</td><td>Host</td><td>Hostname</td><td>host-01</td><td>alert.observables.hostname</td><td>Host associated with the alert.</td></tr>
+<tr><th scope="row">EVID-006</th><td>observable</td><td>Network</td><td>Source IP</td><td>198.51.100.77</td><td>alert.observables.source_ip</td><td>Source IP associated with the alert.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="section" aria-labelledby="reasoning-heading">
+<h2 id="reasoning-heading">Analyst Reasoning</h2>
+<div class="statement-group observations">
+<h3>Observations</h3>
+<div class="statement">
+<span class="statement-id">OBS-001</span>
+<p class="prose">The normalized alert reports an alert type without a scenario-specific reasoning template.</p>
+<p class="reference-list">Evidence: <code>EVID-002</code>, <code>EVID-004</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">OBS-002</span>
+<p class="prose">The alert contains a source IP.</p>
+<p class="reference-list">Evidence: <code>EVID-006</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">OBS-003</span>
+<p class="prose">The alert contains a hostname.</p>
+<p class="reference-list">Evidence: <code>EVID-005</code></p>
+</div>
+</div>
+<div class="statement-group assessment">
+<h3>Assessment</h3>
+<div class="statement">
+<span class="statement-id">ASM-001</span>
+<p class="prose">The available normalized evidence requires analyst validation because no scenario-specific reasoning template exists for this alert type.</p>
+<p class="reference-list">Evidence: <code>EVID-002</code></p>
+</div>
+</div>
+<div class="statement-group gaps">
+<h3>Evidence Gaps</h3>
+<div class="statement">
+<span class="statement-id">GAP-001</span>
+<p class="prose">No scenario-specific corroborating telemetry is represented in the current normalized alert model.</p>
+</div>
+</div>
+</section>
+<section class="section" aria-labelledby="confidence-heading">
+<h2 id="confidence-heading">Confidence Rationale</h2>
+<div class="statement-group supporting">
+<h3>Supporting Factors</h3>
+<div class="statement">
+<span class="statement-id">SUP-001</span>
+<p class="prose">An alert type is identified in the normalized alert.</p>
+<p class="reference-list">Evidence: <code>EVID-002</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">SUP-002</span>
+<p class="prose">A description is identified in the normalized alert.</p>
+<p class="reference-list">Evidence: <code>EVID-004</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">SUP-003</span>
+<p class="prose">A source IP is identified in the normalized evidence.</p>
+<p class="reference-list">Evidence: <code>EVID-006</code></p>
+</div>
+<div class="statement">
+<span class="statement-id">SUP-004</span>
+<p class="prose">A hostname is identified.</p>
+<p class="reference-list">Evidence: <code>EVID-005</code></p>
+</div>
+</div>
+<div class="statement-group limiting">
+<h3>Limiting Factors</h3>
+<div class="statement">
+<span class="statement-id">LIM-001</span>
+<p class="prose">Scenario-specific corroborating telemetry is not represented in the current normalized alert model.</p>
+</div>
+<div class="statement">
+<span class="statement-id">LIM-002</span>
+<p class="prose">Analyst validation is required before treating the reported confidence as high-fidelity.</p>
+</div>
+</div>
+<div class="statement-group overall">
+<h3>Overall</h3>
+<p class="prose">The available normalized fields provide limited grounding for the investigation. Scenario-specific corroboration is unavailable, and these factors do not reproduce the numeric confidence calculation.</p>
+</div>
+</section>
+<section class="section" aria-labelledby="severity-heading">
+<h2 id="severity-heading">Severity Assessment</h2>
+<div class="content-card"><p class="prose">Vendor severity &#x27;low&#x27; is relatively low; context may change priority.</p></div>
+</section>
+<section class="section" aria-labelledby="mitre-heading">
+<h2 id="mitre-heading">MITRE ATT&amp;CK Mapping</h2>
+<div class="table-wrap">
+<table class="mitre-table">
+<thead><tr><th scope="col">Technique ID</th><th scope="col">Technique name</th><th scope="col">Tactic</th><th scope="col">Confidence</th><th scope="col">Rationale</th></tr></thead>
+<tbody>
+<tr><td>UNKNOWN</td><td>Unmapped alert type</td><td>Unknown</td><td>low</td><td>No offline mapping exists for alert_type &#x27;unclassified_alert&#x27;. Manual analyst review and additional context are required.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="section" aria-labelledby="queries-heading">
+<h2 id="queries-heading">Recommended Investigation Queries</h2>
+<h3>QRadar AQL</h3>
+<div class="query-block"><pre><code>SELECT sourceip, destinationip, username, LOGSOURCETYPENAME(devicetype), starttime, category, qid FROM events WHERE sourceip = &#x27;198.51.100.77&#x27; LAST 24 HOURS</code></pre></div>
+<div class="query-block"><pre><code>SELECT LOGSOURCETYPENAME(devicetype), sourceip, username, starttime, category FROM events WHERE devicename ILIKE &#x27;%host-01%&#x27; LAST 7 DAYS</code></pre></div>
+<h3>Microsoft Sentinel KQL</h3>
+<div class="query-block"><pre><code>SecurityEvent
+| where TimeGenerated &gt; ago(24h)
+| where IpAddress == &quot;198.51.100.77&quot; or SourceIP == &quot;198.51.100.77&quot;
+| project TimeGenerated, Computer, Account, IpAddress, Activity</code></pre></div>
+<div class="query-block"><pre><code>Heartbeat
+| where TimeGenerated &gt; ago(7d)
+| where Computer contains &quot;host-01&quot;
+| summarize arg_max(TimeGenerated, *) by Computer</code></pre></div>
+<h3>Microsoft Defender Advanced Hunting KQL</h3>
+<div class="query-block"><pre><code>DeviceNetworkEvents
+| where Timestamp &gt; ago(24h)
+| where RemoteIP == &quot;198.51.100.77&quot; or InitiatingProcessRemoteIP == &quot;198.51.100.77&quot;
+| project Timestamp, DeviceName, ActionType, RemoteIP, InitiatingProcessFileName</code></pre></div>
+<div class="query-block"><pre><code>DeviceInfo
+| where DeviceName contains &quot;host-01&quot;
+| project Timestamp, DeviceName, OSPlatform, PublicIP, ExposureLevel</code></pre></div>
+<h3>OpenSearch / DQL</h3>
+<div class="query-block"><pre><code>source.ip: &quot;198.51.100.77&quot; AND @timestamp:[now-24h TO now]</code></pre></div>
+<div class="query-block"><pre><code>host.name: &quot;host-01&quot; AND @timestamp:[now-7d TO now]</code></pre></div>
+</section>
+<section class="section" aria-labelledby="next-steps-heading">
+<h2 id="next-steps-heading">Next Investigation Steps</h2>
+<ul class="item-list">
+<li>Review alert context and validate observables against authoritative log sources.</li>
+<li>Escalate per organizational severity matrix if business-critical assets are involved.</li>
+<li>Document findings and close or convert to incident per playbook.</li>
+</ul>
+</section>
+<section class="section" aria-labelledby="detection-heading">
+<h2 id="detection-heading">Detection Engineering Opportunities</h2>
+<ul class="item-list">
+<li>Add correlation between this alert type and related authentication or execution events.</li>
+<li>Tune thresholds to reduce noise while preserving coverage for high-fidelity patterns.</li>
+</ul>
+</section>
+<section class="section limitations-section" aria-labelledby="limitations-heading">
+<h2 id="limitations-heading">Analysis Limitations</h2>
+<ul class="item-list">
+<li>Offline v1 framework — no live SIEM, EDR, or email security API queries were executed.</li>
+<li>MITRE mappings are deterministic templates, not ML-classified or vendor-validated attributions.</li>
+<li>Recommended queries are example pivots; field names and log sources vary by deployment.</li>
+</ul>
+</section>
+<footer class="report-footer">
+<p>Generated by offline SOC Investigation Tools MCP server</p>
+<p>This report supports analyst review and does not perform automated incident closure or containment.</p>
+</footer>
+</main>
+</body>
+</html>

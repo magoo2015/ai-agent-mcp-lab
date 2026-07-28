@@ -7,221 +7,253 @@
 ![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?logo=prometheus&logoColor=white)
 ![Grafana](https://img.shields.io/badge/Grafana-F46800?logo=grafana&logoColor=white)
 
-An AI Security Engineering lab for practicing SOC investigation automation, Model Context Protocol (MCP), AI Gateway design, prompt evaluation, observability, and detection engineering in a controlled environment—without live SIEM, EDR, or production APIs.
+An offline, deterministic AI-assisted SOC investigation platform that converts normalized security alerts into evidence-grounded analyst reports with structured evidence, analyst reasoning, confidence rationale, recommended disposition, hunt-query drafts, and portable Markdown and HTML outputs with browser print-to-PDF support.
 
-The repository contains two major workflows:
+The lab does **not** connect to live SIEM or EDR systems, does **not** perform automated response, and always requires human analyst review. Investigation outputs are reproducible from the same sample inputs. MCP tools expose the investigation workflow; the AI Gateway and local-model paths are separate supporting components for chat and prompt evaluation—not silent drivers of report conclusions.
 
-1. **AI Platform** — Self-hosted runtime on Docker Compose behind Nginx: Open WebUI for chat, a FastAPI AI Gateway for programmatic model access (Ollama locally, optional OpenAI), and Prometheus/Grafana for host and container metrics. Inference is optional via an `ai` profile so a small VPS can keep the UI and observability stack lightweight when models are not needed.
-
-2. **SOC Investigation Engine** — Offline MCP server that accepts normalized alert JSON (for example Wazuh SSH failures, Defender suspicious process, or Proofpoint phishing samples), maps activity to MITRE ATT&CK, drafts multi-SIEM hunt queries, and returns analyst-ready packages as Markdown SOC reports. Tools are bounded and deterministic for safe demos and regression testing.
-
-A SOC analyst prompt library and promptfoo evaluation suite sit alongside the gateway so prompt quality can be tested against the same inference path used in the lab.
+This project is educational and portfolio-oriented. It is not production-ready and does not independently determine true positives.
 
 ![Architecture Overview](docs/images/architecture-overview.svg)
 
-## Features
+## Key Capabilities
 
-### AI Platform
-
-- **AI Gateway** — FastAPI proxy with API-key protection, request limits, and Prometheus metrics
-- **Ollama** — Local LLM inference (Compose `ai` profile; default model `tinyllama`)
-- **Optional OpenAI provider** — Gateway routing when `OPENAI_API_KEY` is configured
-- **Open WebUI** — Browser chat UI proxied through Nginx
-
-### Security Investigation
-
-- **MCP Investigation Engine** — Offline stdio MCP server (`investigate_alert`, `map_mitre`, `generate_queries`)
-- **MITRE Mapping** — Evidence-linked ATT&CK technique mapping from alert context
-- **Investigation Reports** — Structured packages with Markdown SOC report demos and standalone offline HTML
-- **Browser PDF export** — Print the HTML report from a browser (Save as PDF); no separate PDF renderer in the service
-- **Query Generation** — QRadar AQL, Microsoft Defender KQL, Sentinel KQL, and OpenSearch DQL drafts
-- **Detection Recommendations** — Detection opportunities and next-step guidance per alert type
-
-### Detection Engineering
-
-- Alert-type detection opportunity lists (SSH brute force, suspicious process, phishing, and related cases)
-- Multi-SIEM investigation and hunt query drafts for analyst handoff
-- Sample-driven workflows suitable for review, tuning, and conversion—not auto-deployed rules
-
-### Observability
-
-- Prometheus metrics collection (Node Exporter, cAdvisor, self-scrape, AI Gateway `/metrics`)
-- Grafana dashboards UI behind Nginx at `/grafana/`
-- Core vs `ai` profile split for capacity-aware operation on small VPS hosts
-
-### Prompt Evaluation
-
-- SOC prompt templates (alert summary, MITRE mapping, detection recommendation, executive summary)
-- promptfoo evaluation against the AI Gateway (`eval` Compose profile)
-
-## Report Outputs
-
-The investigation platform supports:
-
-- **Markdown** investigation reports
-- **Standalone offline HTML** reports
-- **Browser-generated PDF** reports
-
-PDF files are produced by printing the standalone HTML report through a browser. This avoids introducing a second report renderer or a heavyweight PDF dependency into the MCP service.
-
-Examples:
-
-- [docs/demo-output/ssh-failed-login-investigation.html](docs/demo-output/ssh-failed-login-investigation.html)
-- [docs/demo-output/ssh-failed-login-investigation.pdf](docs/demo-output/ssh-failed-login-investigation.pdf)
-
-Workflow detail: [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) (Version 1.1 Phase 7 — Browser Print-to-PDF Export).
+- Deterministic alert investigation from normalized JSON
+- Structured evidence with traceable `EVID-###` IDs
+- Evidence-based analyst reasoning
+- Confidence rationale (supporting and limiting factors)
+- Conservative recommended disposition (`Suspicious Activity` / `Insufficient Evidence`)
+- Analyst review required on every report
+- MITRE ATT&CK mapping for supported alert types
+- Query generation for supported platforms (AQL, KQL, DQL)
+- Markdown and standalone HTML reports from the same `InvestigationReport`
+- Browser print-to-PDF (no separate PDF renderer)
+- MCP investigation tools over stdio
+- Offline sample workflows
+- Prompt evaluation and local-model experimentation (separate from report conclusions)
 
 ## Architecture
 
-Public traffic enters through Nginx. Open WebUI and Grafana are served on distinct paths; programmatic model calls go through the AI Gateway to Ollama or optional OpenAI.
+Normalized alerts flow through deterministic investigation tools into a structured report, then into Markdown and HTML renderers. PDF is a browser export of the HTML.
 
-```text
-Internet
-  ↓
-Nginx
-  ↓
-Open WebUI / Grafana
-  ↓
-AI Gateway
-  ↓
-Ollama / OpenAI
+```mermaid
+flowchart TD
+    A[Normalized Security Alert] --> B[Deterministic Investigation Tools]
+    B --> C[InvestigationOutput]
+    C --> D[Report Builder]
+    D --> E[InvestigationReport]
+
+    E --> F[Evidence]
+    E --> G[Analyst Reasoning]
+    E --> H[Confidence Rationale]
+    E --> I[Recommended Disposition]
+    E --> J[Severity, MITRE, Queries, Next Steps and Limitations]
+
+    E --> K[Markdown Renderer]
+    E --> L[HTML Renderer]
+    L --> M[Browser Print-to-PDF]
 ```
 
-Investigations follow a separate, offline path from alert input to Markdown report:
+Investigation and report-support modules use deterministic logic and templates. The AI Gateway, Ollama, and prompt evaluation paths are separate experimentation components and do not silently alter report conclusions.
 
-```text
-Alert
-  ↓
-MCP Investigation
-  ↓
-Markdown Report
-```
+The self-hosted platform stack (Nginx, Open WebUI, AI Gateway, Prometheus, Grafana) runs alongside the offline MCP investigation path. Full platform diagram: [docs/images/architecture-overview.svg](docs/images/architecture-overview.svg).
 
-Full diagram: [docs/images/architecture-overview.svg](docs/images/architecture-overview.svg).  
-Platform detail: [platform/docs/architecture.md](platform/docs/architecture.md).
+## Demo Gallery
 
-## Screenshots
+Four fictional scenarios demonstrate the investigation and reporting pipeline:
 
-Screenshots will be added during the v1.0 release.
+| Scenario | HTML | Notes |
+| -------- | ---- | ----- |
+| [SSH Failed Login](docs/demo-output/ssh-failed-login-investigation.html) | Full HTML | [PDF sample](docs/demo-output/ssh-failed-login-investigation.pdf) |
+| [Phishing Email](docs/demo-output/phishing-email-investigation.html) | Full HTML | — |
+| [Suspicious Process](docs/demo-output/suspicious-process-investigation.html) | Full HTML | — |
+| [Insufficient Evidence](docs/demo-output/insufficient-evidence-investigation.html) | Full HTML | Conservative disposition |
 
-## Skills Demonstrated
+[Full Demo Gallery — index](docs/demo-output/README.md)
 
-Python · FastAPI · Docker · Docker Compose · MCP · Promptfoo · Grafana · Prometheus · Nginx · MITRE ATT&CK · QRadar AQL · Microsoft Defender KQL · Sentinel KQL · Detection Engineering · SOC Automation
+GitHub may display raw HTML source; open the files locally in a browser for the intended offline presentation.
 
-## Project Structure
+## Example Report
 
-```text
-ai-agent-mcp-lab/
-├── docs/
-│   ├── demo-output/              # Sample Markdown, HTML, and PDF SOC reports
-│   └── images/                   # Architecture diagrams and README assets
-│       └── architecture-overview.svg
-├── notes/
-│   └── lab_journal.md
-├── platform/
-│   ├── ai-gateway/               # FastAPI AI Gateway (Ollama + optional OpenAI)
-│   ├── mcp-server/               # Offline SOC MCP tools + demo CLI
-│   ├── nginx/                    # Reverse proxy config
-│   ├── prometheus/               # Scrape config
-│   ├── grafana/                  # Grafana volume mount point
-│   ├── prompts/                  # SOC analyst prompt templates
-│   ├── promptfoo/                # Prompt evaluation config
-│   ├── scripts/                  # deploy, start-ai, stop-ai, status, stop
-│   ├── docs/                     # Platform architecture and ops docs
-│   ├── docker-compose.yml
-│   └── .env.example
-├── sample_data/                  # Legacy lab alert samples
-├── scripts/
-│   ├── soc_mcp_server.py         # Extended MCP tool catalog (workstation)
-│   └── test_soc_mcp_server.py
-├── .cursor/
-│   ├── mcp.json
-│   └── rules/
-├── CHANGELOG.md
-├── LICENSE
-└── README.md
-```
+Primary sample: [SSH Failed Login — HTML](docs/demo-output/ssh-failed-login-investigation.html) · [PDF](docs/demo-output/ssh-failed-login-investigation.pdf)
+
+Each report includes Investigation Status, Executive Summary, Evidence, Analyst Reasoning, Confidence Rationale, Recommended Disposition, severity, MITRE, hunt queries, next steps, and limitations—derived from one `InvestigationReport` object.
 
 ## Quick Start
 
-From `platform/` (copy `.env.example` to `.env` and set `GRAFANA_ADMIN_PASSWORD` first):
+```bash
+git clone <repository-url>
+cd ai-agent-mcp-lab/platform
+cp .env.example .env
+docker compose --profile mcp build mcp-server
+```
+
+For the **isolated MCP investigation demo**, you only need the `mcp` profile and the built image. No live SIEM credentials are required.
+
+For the **full platform stack** (Nginx, Open WebUI, Prometheus, Grafana), set `GRAFANA_ADMIN_PASSWORD` in `platform/.env` before `./scripts/deploy.sh`. Gateway chat also needs `GATEWAY_API_KEY` when using the AI Gateway.
+
+Compact investigation (JSON to stdout):
 
 ```bash
-# Core stack: Nginx, Open WebUI, Prometheus, Grafana, exporters
-./scripts/deploy.sh
-
-# Optional local inference + AI Gateway
-./scripts/start-ai.sh
-
-# Offline MCP investigation demo (Markdown report to stdout)
 docker compose --profile mcp run --rm mcp-server \
-  python demo_investigation.py sample_data/ssh_failed_login.json
+  python main.py sample_data/ssh_failed_login.json --compact
 ```
 
-Helper scripts and profiles: [platform/README.md](platform/README.md).
+Generate Markdown and HTML:
 
-## Example Investigation Workflow
+```bash
+docker compose --profile mcp run --rm \
+  -v "$(pwd)/../docs/demo-output:/output" \
+  mcp-server \
+  python demo_investigation.py \
+    sample_data/ssh_failed_login.json \
+    -o /output/ssh-failed-login-investigation.md \
+    --html-output /output/ssh-failed-login-investigation.html
+```
+
+Helper scripts and Compose profiles: [platform/README.md](platform/README.md).
+
+## MCP Tools
+
+The offline platform MCP server (`platform/mcp-server`) exposes:
+
+- `investigate_alert`
+- `map_mitre`
+- `generate_queries`
+
+An extended workstation catalog (`scripts/soc_mcp_server.py`) also includes tools such as `investigate_security_incident`, `correlate_security_events`, `generate_investigation_runbook`, `review_investigation_decision`, `generate_splunk_spl`, and `enrich_observable`.
+
+Detail: [platform/mcp-server/README.md](platform/mcp-server/README.md).
+
+## Report Outputs
+
+All report content derives from the same `InvestigationReport`.
+
+### Markdown
+
+Portable, reviewable in Git, suitable for tickets and documentation.
+
+### Standalone HTML
+
+Embedded CSS, no JavaScript, no external assets, offline, and print-friendly. Authoritative source for browser presentation.
+
+### PDF
+
+Generated through browser print-to-PDF from the HTML report. There is no independent PDF renderer in the service. One committed SSH sample is included under `docs/demo-output/`.
+
+## Testing
+
+Validated report suite:
 
 ```text
-Normalized alert JSON
-  (e.g. sample_data/ssh_failed_login.json)
-        ↓
-MCP investigate_alert
-        ↓
-MITRE mapping + severity/confidence
-        ↓
-Recommended queries
-  (QRadar AQL · Defender KQL · Sentinel KQL · OpenSearch DQL)
-        ↓
-Detection opportunities + next steps
-        ↓
-Markdown SOC investigation report
-  (docs/demo-output/*.md)
-        ↓
-Standalone HTML report (optional)
-  (docs/demo-output/*.html)
-        ↓
-Browser Print → Save as PDF (optional)
-  (docs/demo-output/*.pdf)
+138 report tests
+41 HTML renderer tests
+179 total
 ```
 
-Example reports: [docs/demo-output/](docs/demo-output/).
+Also validated for Version 1.1 gallery readiness:
 
-## Current Status
+- Docker MCP build
+- Demo investigation (Markdown + HTML)
+- Compact CLI for all four gallery inputs
+- MCP client smoke test
+- Four gallery sample inputs and expected dispositions
 
-### Completed
+Do not treat this as measured code coverage or live vendor integration testing.
 
-- Docker Compose AI security platform (Nginx, Open WebUI, observability)
-- AI Gateway with Ollama and optional OpenAI providers
-- Offline MCP investigation engine and Markdown report demos
-- MITRE mapping and multi-SIEM query generation
-- SOC prompt library and promptfoo evaluation against the gateway
-- Architecture overview diagram and platform documentation
+## Design Principles
 
-### In Progress
+- Evidence first
+- Deterministic conclusions
+- Traceable references
+- Conservative disposition vocabulary
+- Analyst-in-the-loop
+- Offline-first samples
+- Separation of investigation and presentation
+- No hidden automated response
 
-- HTTPS/TLS activation (ACME bootstrap prepared; certificate issuance pending)
-- Expanded Grafana dashboards and basic alerting
-- Broader promptfoo scenarios beyond the default SSH suite
-- Root documentation polish (this pass)
+## Technology Stack
 
-### Future Ideas
+### Application
 
-- garak LLM security testing against the AI Gateway
-- GitHub Actions CI for MCP tests and linting
-- Additional investigation workflows (malware, PowerShell, privilege escalation)
-- Optional threat-intel and case-management integrations
+- Python
+- FastAPI
+- Pydantic
+- Model Context Protocol
+
+### AI and evaluation
+
+- Ollama
+- OpenAI-compatible AI Gateway
+- Promptfoo
+- Open WebUI
+
+### Security investigation and reporting
+
+- MITRE ATT&CK
+- QRadar AQL
+- Microsoft Sentinel KQL
+- Microsoft Defender Advanced Hunting KQL
+- OpenSearch DQL
+- Markdown
+- Standalone HTML
+- Browser print-to-PDF
+
+### Infrastructure and observability
+
+- Docker Compose
+- Nginx
+- Prometheus
+- Grafana
+- Node Exporter
+- cAdvisor
+
+## Security and Privacy
+
+- Demo data is fictional (documentation IP ranges and example domains)
+- HTML escapes report-derived content
+- HTML contains no JavaScript or external assets
+- Normal report generation requires no external network access
+- `.env` is ignored; secrets must not be committed
+- Analyst review remains required
+- No automated remediation or containment occurs
+
+## Limitations
+
+- Uses normalized sample alerts
+- No live SIEM, EDR, email, or cloud connectors
+- Query and MITRE recommendations require analyst validation
+- No automated containment, remediation, or closure
+- Analyst review is required
+- PDF export is browser-based
+- The project is educational and portfolio-oriented
+- Small local models may provide limited output quality
+- External AI providers are optional and configuration-dependent
+
+## Roadmap
+
+Future work (post–Version 1.1; not release blockers):
+
+- Investigation timeline model
+- Additional alert types
+- Optional human-approved live connectors
+- Optional batch PDF generation if needed
+- Broader prompt and provider evaluation
+- CI and release automation
+- HTTPS and observability improvements
 
 ## Documentation
 
 | Document | Purpose |
 | -------- | ------- |
+| [docs/demo-output/README.md](docs/demo-output/README.md) | Demo gallery index and regeneration |
+| [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) | Architecture, status, and handoff context |
 | [platform/README.md](platform/README.md) | Platform ops, profiles, and quick commands |
-| [platform/mcp-server/README.md](platform/mcp-server/README.md) | MCP tools, CLI, and Cursor wiring |
+| [platform/mcp-server/README.md](platform/mcp-server/README.md) | MCP tools, CLI, and gallery commands |
 | [platform/docs/architecture.md](platform/docs/architecture.md) | Component and traffic-flow detail |
 | [platform/docs/platform-blueprint.md](platform/docs/platform-blueprint.md) | Security model and longer roadmap |
 | [platform/docs/prompt-library.md](platform/docs/prompt-library.md) | SOC prompt templates |
 | [platform/docs/promptfoo.md](platform/docs/promptfoo.md) | Prompt evaluation setup |
+| [CHANGELOG.md](CHANGELOG.md) | Notable changes |
 
 ## Author
 

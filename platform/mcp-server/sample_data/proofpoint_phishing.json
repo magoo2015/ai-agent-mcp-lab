@@ -5,7 +5,7 @@
   "description": "Phishing email detected with credential-harvesting URL impersonating corporate IT password reset.",
   "observables": {
     "sender": "it-support@corp-secure-login.example",
-    "recipient": "analyst@company.com",
+    "recipient": "analyst@example.com",
     "url": "https://corp-secure-login.example/reset?token=abc123",
     "hostname": "mail-gateway-01"
   },
@@ -15,7 +15,7 @@
     "threatType": "phish",
     "threatStatus": "delivered",
     "sender": "it-support@corp-secure-login.example",
-    "recipient": ["analyst@company.com"],
+    "recipient": ["analyst@example.com"],
     "subject": "Urgent: Password reset required within 1 hour",
     "urls": [
       "https://corp-secure-login.example/reset?token=abc123"

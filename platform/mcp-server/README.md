@@ -81,6 +81,9 @@ docker compose --profile mcp run --rm mcp-server \
 
 docker compose --profile mcp run --rm mcp-server \
   python main.py sample_data/proofpoint_phishing.json
+
+docker compose --profile mcp run --rm mcp-server \
+  python main.py sample_data/insufficient_evidence.json
 ```
 
 ### Docker — MCP stdio server
@@ -127,7 +130,18 @@ python test_mcp_client.py
 
 ## End-to-End Investigation Demo
 
-`demo_investigation.py` is a small portfolio demo: it loads a normalized alert JSON, starts `mcp_server.py` over stdio, calls the existing `investigate_alert` MCP tool, and renders a Markdown SOC investigation report. By default the report goes to stdout; use `--output` / `-o` to write a file (parent directories are created automatically). The intended runtime is the Docker Compose `mcp` profile.
+`demo_investigation.py` loads a normalized alert JSON, starts `mcp_server.py` over stdio, calls `investigate_alert`, builds one `InvestigationReport`, and renders Markdown and optional standalone HTML. By default Markdown goes to stdout; use `-o` / `--output` and `--html-output` to write files. The MCP container has no default host `docs/` mount—mount `docs/demo-output` to `/output` when writing gallery artifacts. No live SIEM credentials are required. There is no automated PDF flag; PDF is a manual browser print of the HTML.
+
+### Gallery scenarios (expected dispositions)
+
+| Scenario | Sample input | Expected disposition | Gallery artifacts |
+| -------- | ------------ | -------------------- | ----------------- |
+| SSH Failed Login | `sample_data/ssh_failed_login.json` | Suspicious Activity | `ssh-failed-login-investigation.md` / `.html` / `.pdf` |
+| Phishing Email | `sample_data/proofpoint_phishing.json` | Suspicious Activity | `phishing-email-investigation.md` / `.html` |
+| Suspicious Process | `sample_data/defender_suspicious_process.json` | Suspicious Activity | `suspicious-process-investigation.md` / `.html` |
+| Insufficient Evidence | `sample_data/insufficient_evidence.json` | Insufficient Evidence | `insufficient-evidence-investigation.md` / `.html` |
+
+Index: [docs/demo-output/README.md](../../docs/demo-output/README.md).
 
 ```bash
 cd platform
@@ -139,29 +153,49 @@ docker compose --profile mcp run --rm mcp-server \
   python demo_investigation.py
 ```
 
-```bash
-mkdir -p ../docs/demo-output
+One investigation produces both Markdown and HTML (volume mount required for host files):
 
-docker compose --profile mcp run --rm mcp-server \
+```bash
+docker compose --profile mcp run --rm \
+  -v "$(pwd)/../docs/demo-output:/output" \
+  mcp-server \
   python demo_investigation.py \
-  sample_data/ssh_failed_login.json \
-  > ../docs/demo-output/ssh-failed-login-investigation.md
+    sample_data/ssh_failed_login.json \
+    -o /output/ssh-failed-login-investigation.md \
+    --html-output /output/ssh-failed-login-investigation.html
 ```
 
 ```bash
-docker compose --profile mcp run --rm mcp-server \
+docker compose --profile mcp run --rm \
+  -v "$(pwd)/../docs/demo-output:/output" \
+  mcp-server \
   python demo_investigation.py \
-  sample_data/defender_suspicious_process.json \
-  > ../docs/demo-output/defender-suspicious-process-investigation.md
+    sample_data/proofpoint_phishing.json \
+    -o /output/phishing-email-investigation.md \
+    --html-output /output/phishing-email-investigation.html
 ```
 
 ```bash
-docker compose --profile mcp run --rm mcp-server \
+docker compose --profile mcp run --rm \
+  -v "$(pwd)/../docs/demo-output:/output" \
+  mcp-server \
   python demo_investigation.py \
-  sample_data/proofpoint_phishing.json \
-  > ../docs/demo-output/proofpoint-phishing-investigation.md
+    sample_data/defender_suspicious_process.json \
+    -o /output/suspicious-process-investigation.md \
+    --html-output /output/suspicious-process-investigation.html
 ```
 
+```bash
+docker compose --profile mcp run --rm \
+  -v "$(pwd)/../docs/demo-output:/output" \
+  mcp-server \
+  python demo_investigation.py \
+    sample_data/insufficient_evidence.json \
+    -o /output/insufficient-evidence-investigation.md \
+    --html-output /output/insufficient-evidence-investigation.html
+```
+
+Browser print-to-PDF: open the HTML locally → File → Print → Save as PDF. Only the SSH PDF is committed as a sample.
 ## Connecting from Cursor (or another MCP client)
 
 Use a configuration that launches the Dockerized stdio server. Do **not** hardcode host-specific absolute paths; run the client command from the `platform` directory (or set the client's working-directory option to `platform` if supported):
@@ -233,7 +267,7 @@ Supported `alert_type` values for MITRE mapping:
 | `mcp_server.py` | Official MCP SDK stdio transport + tool registration |
 | `test_mcp_client.py` | Stdio client smoke test |
 | `demo_investigation.py` | End-to-end MCP demo — alert JSON → Markdown SOC report |
-| `sample_data/` | Realistic offline alert fixtures (SSH, Defender, Proofpoint) |
+| `sample_data/` | Offline alert fixtures (SSH, phishing, suspicious process, insufficient evidence) |
 
 Confidence scores and MITRE mappings are **conservative by design** — the framework does not overstate certainty.
 
@@ -269,6 +303,8 @@ Keep adapters behind interfaces so offline CLI and MCP tests continue to pass wi
 
 ## Related documentation
 
+- [Demo gallery](../../docs/demo-output/README.md)
 - [Platform README](../README.md)
+- [Root README](../../README.md)
 - [Prompt library — MITRE mapping](../prompts/mitre_mapping.md)
 - [Architecture](../docs/architecture.md)
